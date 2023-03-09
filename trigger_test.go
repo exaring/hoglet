@@ -139,6 +139,24 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			},
 			wantState: StateOpen,
 		},
+		{
+			// we want to re-open fast if we closed on a fluke (to avoid thundering herd agains a service that might be
+			// close to capacity and therefore failing intermittently)
+			name: "single failure after reopen closes",
+			fields: fields{
+				sampleCount: 50,
+				threshold:   0.9,
+			},
+			stages: []stages{
+				{calls: 100, failureFunc: alwaysFailure},
+				{calls: 1, failureFunc: func(int) bool {
+					time.Sleep(500 * time.Millisecond)
+					return false
+				}},
+				{calls: 1, failureFunc: alwaysFailure},
+			},
+			wantState: StateOpen,
+		},
 	}
 	for _, tt := range tests {
 		tt := tt
