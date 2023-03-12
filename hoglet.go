@@ -30,6 +30,7 @@ type Trigger interface {
 	Observe(failure bool)
 }
 
+// BreakableFunc is the type of the function wrapped by a Breaker.
 type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
 
 // NewBreaker instantiates a new breaker that wraps the given function. See [Do] for calling semantics.

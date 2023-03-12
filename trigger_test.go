@@ -37,7 +37,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "start closed",
 			fields: fields{
 				sampleCount: 10,
-				threshold:   0.7,
+				threshold:   0.3,
 			},
 			wantState: StateClosed,
 		},
@@ -45,7 +45,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "always success",
 			fields: fields{
 				sampleCount: 10,
-				threshold:   0.7,
+				threshold:   0.3,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
@@ -56,7 +56,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "always failure",
 			fields: fields{
 				sampleCount: 10,
-				threshold:   0.1,
+				threshold:   0.9,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -67,7 +67,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "start open; finish closed",
 			fields: fields{
 				sampleCount: 10,
-				threshold:   0.8,
+				threshold:   0.2,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -91,7 +91,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "constant low failure rate stays mostly closed (flaky)",
 			fields: fields{
 				sampleCount: 50,
-				threshold:   0.8,
+				threshold:   0.2,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }},
@@ -102,7 +102,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "constant high failure rate stays mostly open (flaky)",
 			fields: fields{
 				sampleCount: 50,
-				threshold:   0.8,
+				threshold:   0.2,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }},
@@ -113,7 +113,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "single success at half-open enough to close",
 			fields: fields{
 				sampleCount: 50,
-				threshold:   0.9,
+				threshold:   0.1,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -128,7 +128,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "single failure at half-open keeps open",
 			fields: fields{
 				sampleCount: 50,
-				threshold:   1,
+				threshold:   0.0,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -145,7 +145,7 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			name: "single failure after reopen closes",
 			fields: fields{
 				sampleCount: 50,
-				threshold:   0.9,
+				threshold:   0.1,
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},

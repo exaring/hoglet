@@ -23,7 +23,7 @@ func foo(ctx context.Context, bar int) (Foo, error) {
 func Example() {
 	h := hoglet.NewBreaker(
 		foo,
-		hoglet.NewEWMATrigger(10, 0.9, 5*time.Second),
+		hoglet.NewEWMATrigger(10, 0.1, 5*time.Second),
 		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
 	f, err := h.Do(context.Background(), 42)

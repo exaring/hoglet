@@ -1,18 +1,20 @@
 package hoglet
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 )
 
-// used to mock time
-var timeNow = time.Now
-
+// State represents the possible states of a [Trigger].
 type State int
 
 const (
+	// StateOpen means the [Trigger] is open.
 	StateOpen State = iota
+	// StateClosed means the [Trigger] is closed.
 	StateClosed
+	// StateHalfOpen means the [Trigger] is half-open.
 	StateHalfOpen
 )
 
@@ -29,8 +31,8 @@ func (s State) String() string {
 	}
 }
 
-// EWMATrigger is a [Trigger] that uses an exponentially weighted moving success rate between 0 and 1. Each success
-// counts as 1, and each failure counts as 0.
+// EWMATrigger is a [Trigger] that uses an exponentially weighted moving failure rate between 0 and 1. Each failure
+// counting as 1, and each success as 0.
 // It assumes the wrapped function is called with an approximately constant interval and will skew results otherwise.
 // A zero EWMATrigger is ready to use, but will never open.
 type EWMATrigger struct {
@@ -39,7 +41,7 @@ type EWMATrigger struct {
 	halfOpenDelay time.Duration
 
 	// State
-	successRate atomic.Value
+	failureRate atomic.Value
 	triggeredAt atomic.Value
 }
 
@@ -49,7 +51,7 @@ type EWMATrigger struct {
 // be considered. A higher value slows down convergence. As a rule of thumb, breakers with higher throughput should use
 // higher sample counts to avoid opening up on small hiccups.
 //
-// The threshold is the success rate below which the breaker will open.
+// The threshold is the failure rate at which the breaker should open.
 //
 // The halfOpenDelay is the duration the breaker will stay open before switching to the half-open state, where a
 // limited amount of calls are allowed and - if successful - may reopen the trigger.
@@ -62,16 +64,16 @@ func NewEWMATrigger(sampleCount int, threshold float64, halfOpenDelay time.Durat
 		halfOpenDelay: halfOpenDelay,
 	}
 
-	e.successRate.Store(float64(1.0)) // start closed
-	e.triggeredAt.Store(time.Time{})  // start closed
+	e.failureRate.Store(float64(math.SmallestNonzeroFloat64)) // start closed; also work around "initial value" problem
+	e.triggeredAt.Store(time.Time{})                          // start closed
 
 	return e
 }
 
 func (e *EWMATrigger) Observe(failure bool) {
-	var value float64 = 1.0
+	var value float64 = 0.0
 	if failure {
-		value = 0.0
+		value = 1.0
 	}
 
 	state := e.State()
@@ -79,23 +81,23 @@ func (e *EWMATrigger) Observe(failure bool) {
 		if failure {
 			// We reset triggeredAt to block further calls to pass through when half-open. A success will cause the trigger
 			// to close.
-			e.triggeredAt.Store(timeNow())
+			e.triggeredAt.Store(time.Now())
 		} else {
 			e.triggeredAt.Store(time.Time{})
-			e.successRate.Store(e.threshold)
+			e.failureRate.Store(e.threshold)
 			return
 		}
 	}
 
-	// Unconditionally setting via swap and maybe overrwriting is faster in the initial case.
-	current, _ := e.successRate.Swap(value).(float64)
-	if current != 0 {
-		current = (value * e.decay) + (current * (1 - e.decay))
-		e.successRate.Store(current)
+	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
+	failureRate, _ := e.failureRate.Swap(value).(float64)
+	if failureRate != 0 {
+		failureRate = (value * e.decay) + (failureRate * (1 - e.decay))
+		e.failureRate.Store(failureRate)
 	}
 
-	if current < e.threshold {
-		e.triggeredAt.CompareAndSwap(time.Time{}, timeNow())
+	if failureRate >= e.threshold {
+		e.triggeredAt.CompareAndSwap(time.Time{}, time.Now())
 	} else {
 		e.triggeredAt.Store(time.Time{})
 	}
@@ -108,7 +110,7 @@ func (e *EWMATrigger) State() State {
 		return StateClosed
 	}
 
-	if timeNow().Sub(t) < e.halfOpenDelay {
+	if time.Since(t) < e.halfOpenDelay {
 		return StateOpen
 	}
 
