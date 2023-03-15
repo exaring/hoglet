@@ -37,10 +37,10 @@ type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
 
 // NewBreaker instantiates a new breaker that wraps the given function. See [Do] for calling semantics.
 // A Breaker with a nil trigger will never open.
-func NewBreaker[IN, OUT any](f BreakableFunc[IN, OUT], tripper Trigger, opts ...Option) *Breaker[IN, OUT] {
+func NewBreaker[IN, OUT any](f BreakableFunc[IN, OUT], trigger Trigger, opts ...Option) *Breaker[IN, OUT] {
 	b := &Breaker[IN, OUT]{
 		f:       f,
-		trigger: tripper,
+		trigger: trigger,
 		options: options{
 			isFailure: defaultFailureCondition,
 		},

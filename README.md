@@ -1,9 +1,10 @@
 [![Build Status](https://github.com/exaring/hoglet/actions/workflows/main.yaml/badge.svg)](https://github.com/exaring/hoglet/actions/workflows/main.yaml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/exaring/hoglet.svg)](https://pkg.go.dev/github.com/exaring/hoglet)
 [![Go Report Card](https://goreportcard.com/badge/github.com/exaring/hoglet)](https://goreportcard.com/report/github.com/exaring/hoglet)
 
 # hoglet
 
-Simple circuit breaker library.
+Simple low-overhead circuit breaker library.
 
 ## Usage
 
@@ -15,7 +16,7 @@ h := hoglet.NewBreaker(
         }
         return Foo{}, fmt.Errorf("bar is not 42")
     },
-    hoglet.NewEWMATrigger(10, 0.9, 5*time.Second),
+    hoglet.NewSlidingWindowTrigger(10, 0.1, 5*time.Second),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 )
 f, _ := h.Do(context.Background(), 42)
