@@ -32,10 +32,28 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 	}
 }
 
-func BenchmarkHoglet(b *testing.B) {
+func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 	breaker := hoglet.NewBreaker(
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
 		hoglet.NewEWMATrigger(10, 0.9, 2*time.Second),
+	)
+
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = breaker.Do(ctx, struct{}{})
+		}
+	})
+}
+
+func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
+	breaker := hoglet.NewBreaker(
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
+		hoglet.NewSlidingWindowTrigger(10*time.Second, 0.9, 2*time.Second),
 	)
 
 	ctx := context.Background()

@@ -25,8 +25,10 @@ type options struct {
 // Trigger is the interface implemented by the different
 type Trigger interface {
 	// State returns the current state of the breaker.
+	// It is called exactly once per call to [Do], before calling the wrapped function.
 	State() State
 	// Observe will only be called if [State] returns StateOpen or StateHalfOpen.
+	// It is called at most once per call to [Do], after calling the wrapped function, depending on the breaker state.
 	Observe(failure bool)
 }
 
@@ -76,7 +78,7 @@ func (b *Breaker[IN, OUT]) Do(ctx context.Context, in IN) (out OUT, err error) {
 	go b.observeCtxOnce(once, ctx)
 
 	defer func() {
-		// ensure we also open the circuit on panics
+		// ensure we also open the breaker on panics
 		if err := recover(); err != nil {
 			b.observeOnce(once, true)
 			panic(err) // let the caller deal with panics

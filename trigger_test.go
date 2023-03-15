@@ -11,41 +11,43 @@ import (
 func TestEWMATrigger_zero_value_does_not_open(t *testing.T) {
 	o := &EWMATrigger{}
 	o.Observe(true)
-	assert.Equal(t, o.State(), StateClosed)
+	assert.Equal(t, StateClosed, o.State())
+}
+
+func TestEWMATrigger_zero_value_does_not_panic(t *testing.T) {
+	o := &EWMATrigger{}
+	assert.NotPanics(t, func() { o.State() })
 }
 
 func TestEWMATrigger_Observe_State(t *testing.T) {
+	halfOpenDelay := 500 * time.Millisecond
 	// helper functions to make tests stages more readable
 	alwaysFailure := func(int) bool { return true }
 	alwaysSuccessful := func(int) bool { return false }
 
-	type fields struct {
-		sampleCount int
-		threshold   float64
-	}
 	type stages struct {
 		calls       int
 		failureFunc func(int) bool
 	}
 	tests := []struct {
 		name      string
-		fields    fields
+		triggers  []Trigger
 		stages    []stages
 		wantState State
 	}{
 		{
 			name: "start closed",
-			fields: fields{
-				sampleCount: 10,
-				threshold:   0.3,
+			triggers: []Trigger{
+				NewEWMATrigger(10, 0.3, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.3, halfOpenDelay),
 			},
 			wantState: StateClosed,
 		},
 		{
 			name: "always success",
-			fields: fields{
-				sampleCount: 10,
-				threshold:   0.3,
+			triggers: []Trigger{
+				NewEWMATrigger(10, 0.3, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.3, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
@@ -54,9 +56,9 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		},
 		{
 			name: "always failure",
-			fields: fields{
-				sampleCount: 10,
-				threshold:   0.9,
+			triggers: []Trigger{
+				NewEWMATrigger(10, 0.9, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.9, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -65,9 +67,9 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		},
 		{
 			name: "start open; finish closed",
-			fields: fields{
-				sampleCount: 10,
-				threshold:   0.2,
+			triggers: []Trigger{
+				NewEWMATrigger(10, 0.2, halfOpenDelay),
+				// sliding window is not affected by ordering
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -77,9 +79,9 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		},
 		{
 			name: "start closed; finish open",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.5,
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.4, halfOpenDelay),
+				// sliding window is not affected by ordering
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
@@ -88,10 +90,32 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			wantState: StateOpen,
 		},
 		{
-			name: "constant low failure rate stays mostly closed (flaky)",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.2,
+			name: "just above threshold opens",
+			triggers: []Trigger{
+				NewSlidingWindowTrigger(10*time.Second, 0.5, halfOpenDelay),
+			},
+			stages: []stages{
+				{calls: 100, failureFunc: alwaysSuccessful},
+				{calls: 101, failureFunc: alwaysFailure},
+			},
+			wantState: StateOpen,
+		},
+		{
+			name: "just below threshold stays closed",
+			triggers: []Trigger{
+				NewSlidingWindowTrigger(10*time.Second, 0.5, halfOpenDelay),
+			},
+			stages: []stages{
+				{calls: 101, failureFunc: alwaysSuccessful},
+				{calls: 100, failureFunc: alwaysFailure},
+			},
+			wantState: StateClosed,
+		},
+		{
+			name: "constant low failure rate stays mostly closed (EWMA flaky)",
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.2, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.2, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }},
@@ -99,10 +123,10 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			wantState: StateClosed,
 		},
 		{
-			name: "constant high failure rate stays mostly open (flaky)",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.2,
+			name: "constant high failure rate stays mostly open (EWMA flaky)",
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.2, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.2, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }},
@@ -111,14 +135,14 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		},
 		{
 			name: "single success at half-open enough to close",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.1,
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.1, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 1, failureFunc: func(int) bool {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(halfOpenDelay)
 					return false
 				}},
 			},
@@ -126,14 +150,14 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		},
 		{
 			name: "single failure at half-open keeps open",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.0,
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.1, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 1, failureFunc: func(int) bool {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(halfOpenDelay)
 					return true
 				}},
 			},
@@ -143,14 +167,14 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 			// we want to re-open fast if we closed on a fluke (to avoid thundering herd agains a service that might be
 			// close to capacity and therefore failing intermittently)
 			name: "single failure after reopen closes",
-			fields: fields{
-				sampleCount: 50,
-				threshold:   0.1,
+			triggers: []Trigger{
+				NewEWMATrigger(50, 0.1, halfOpenDelay),
+				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 1, failureFunc: func(int) bool {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(halfOpenDelay)
 					return false
 				}},
 				{calls: 1, failureFunc: alwaysFailure},
@@ -160,18 +184,20 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 	}
 	for _, tt := range tests {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+		for _, ttt := range tt.triggers {
+			ttt := ttt
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-			e := NewEWMATrigger(tt.fields.sampleCount, tt.fields.threshold, 500*time.Millisecond)
-			for _, s := range tt.stages {
-				for i := 0; i < s.calls; i++ {
-					failure := s.failureFunc(i)
-					e.Observe(failure)
-					// t.Logf("%s: sample %d: failure %v: successRate %f => %v", tt.name, i, failure, e.successRate.Load(), e.State())
+				for _, s := range tt.stages {
+					for i := 0; i < s.calls; i++ {
+						failure := s.failureFunc(i)
+						ttt.Observe(failure)
+						// t.Logf("%s: sample %d: failure %v: successRate %f => %v", tt.name, i, failure, e.successRate.Load(), e.State())
+					}
 				}
-			}
-			assert.Equal(t, tt.wantState, e.State())
-		})
+				assert.Equal(t, tt.wantState, ttt.State())
+			})
+		}
 	}
 }
