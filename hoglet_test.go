@@ -91,7 +91,7 @@ func TestHoglet_Do(t *testing.T) {
 		arg       noopIn
 		halfOpen  bool // put the trigger in the half-open state BEFORE calling
 		wantErr   error
-		wantPanic bool
+		wantPanic any
 	}
 	tests := []struct {
 		name  string
@@ -117,7 +117,7 @@ func TestHoglet_Do(t *testing.T) {
 			name: "panic opens",
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
-				{arg: noopInPanic, wantErr: nil, wantPanic: true},
+				{arg: noopInPanic, wantErr: nil, wantPanic: "boom"},
 				{arg: noopInSuccess, wantErr: hoglet.ErrBreakerOpen},
 			},
 		},
@@ -154,11 +154,13 @@ func TestHoglet_Do(t *testing.T) {
 				}
 
 				var err error
-				panicAssert := assert.NotPanics
-				if c.wantPanic {
-					panicAssert = assert.Panics
+				maybeAssertPanic := assert.NotPanics
+				if c.wantPanic != nil {
+					maybeAssertPanic = func(t assert.TestingT, f assert.PanicTestFunc, msgAndArgs ...interface{}) bool {
+						return assert.PanicsWithValue(t, c.wantPanic, f, msgAndArgs...)
+					}
 				}
-				panicAssert(t, func() {
+				maybeAssertPanic(t, func() {
 					_, err = h.Do(context.Background(), c.arg)
 				})
 				assert.Equal(t, c.wantErr, err, "unexpected error on call %d: %v", i, err)
