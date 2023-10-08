@@ -6,86 +6,90 @@ import (
 	"time"
 )
 
-// State represents the possible states of a [Trigger].
-type State int
+// state is unexported because its usefulness is unclear outside of tests.
+type state int
 
 const (
-	// StateClosed means the [Trigger] is closed and will call the wrapped function.
-	StateClosed State = iota
-	// StateOpen means the [Trigger] is open and will NOT call the wrapped function.
-	StateOpen
-	// StateHalfOpen means the [Trigger] is half-open, allowing just a limited number of calls to the wrapped function.
-	StateHalfOpen
+	stateClosed state = iota
+	stateHalfOpen
+	stateOpen
 )
 
-func (s State) String() string {
+func (s state) String() string {
 	switch s {
-	case StateOpen:
-		return "open"
-	case StateClosed:
+	case stateClosed:
 		return "closed"
-	case StateHalfOpen:
+	case stateHalfOpen:
 		return "half-open"
+	case stateOpen:
+		return "open"
 	default:
 		return "unknown"
 	}
 }
 
-type triggerable struct {
+type Observable interface {
+	// Observe is called after the wrapped function returns. If [Breaker.Do] returns a non-nil [Observable], it will be
+	// called exactly once.
+	Observe(failure bool)
+}
+
+// callable encapsulates the common open/half-open/closed logic for all triggers. Each trigger implements decision of
+// *when* to open based on its own state.
+type callable struct {
 	halfOpenDelay time.Duration
 
 	// State
-	triggeredAt atomic.Int64 // unix microseconds
+
+	openedAt atomic.Int64 // unix microseconds
 }
 
-func (t *triggerable) State() State {
-	ta := t.triggeredAt.Load()
+// state checks if the callable can be called. If it returns true, the caller MUST then proceed to Call() to ensure
+// the half-open logic is respected.
+func (c *callable) state() state {
+	oa := c.openedAt.Load()
 
-	if ta == 0 {
-		return StateClosed
+	if oa == 0 {
+		// closed
+		return stateClosed
 	}
 
-	tat := time.UnixMicro(ta)
-
-	if time.Since(tat) < t.halfOpenDelay {
-		return StateOpen
+	if time.Since(time.UnixMicro(oa)) < c.halfOpenDelay {
+		// open
+		return stateOpen
 	}
 
-	return StateHalfOpen
+	// We reset openedAt to block further calls to pass through when half-open. A success will cause the breaker to
+	// close.
+	// CompareAndSwap is needed to avoid clobbering another goroutine's openedAt value.
+	c.openedAt.CompareAndSwap(oa, time.Now().UnixMicro())
+	// half-open
+	return stateHalfOpen
 }
 
-func (t *triggerable) resetOnHalfOpen(failure bool) bool {
-	if state := t.State(); state == StateHalfOpen {
-		if failure {
-			// We reset triggeredAt to block further calls to pass through when half-open. A success will cause the
-			// trigger to close.
-			t.triggeredAt.Store(time.Now().UnixMicro())
-		} else {
-			t.triggeredAt.Store(0)
-			return true
-		}
-	}
+type observableFunc func(failure bool)
 
-	return false
+func (o observableFunc) Observe(failure bool) {
+	o(failure)
 }
 
-// EWMATrigger is a [Trigger] that uses an exponentially weighted moving failure rate between 0 and 1. Each failure
+// EWMABreaker is a [Breaker] that uses an exponentially weighted moving failure rate between 0 and 1. Each failure
 // counting as 1, and each success as 0.
 // It assumes the wrapped function is called with an approximately constant interval and will skew results otherwise.
-// A zero EWMATrigger is ready to use, but will never open.
+// A zero EWMABreaker is ready to use, but will never open.
 //
-// Compared to the [SlidingWindowTrigger], this trigger responds faster to failure bursts, but is more lenient with
+// Compared to the [SlidingWindowBreaker], this breaker responds faster to failure bursts, but is more lenient with
 // constant failure rates.
-type EWMATrigger struct {
+type EWMABreaker struct {
 	decay     float64
 	threshold float64
 
 	// State
 	failureRate atomic.Value
-	triggerable
+	callable
 }
 
-// NewEWMATrigger creates a new EWMATrigger with the given sample count and threshold.
+// NewEWMABreaker creates a new [EWMABreaker] with the given sample count and threshold.
 //
 // The sample count is used to determine how fast previous observations "decay". A value of 1 causes a single sample to
 // be considered. A higher value slows down convergence. As a rule of thumb, breakers with higher throughput should use
@@ -94,14 +98,16 @@ type EWMATrigger struct {
 // The threshold is the failure rate above which the breaker should open.
 //
 // The halfOpenDelay is the duration the breaker will stay open before switching to the half-open state, where a
-// limited amount of calls are allowed and - if successful - may reopen the trigger.
-// Setting it to 0 will cause the trigger to effectively never fire.
-func NewEWMATrigger(sampleCount int, threshold float64, halfOpenDelay time.Duration) *EWMATrigger {
-	e := &EWMATrigger{
+// limited amount of calls are allowed and - if successful - may re-close the breaker.
+// Setting it to 0 will cause the breaker to effectively never open.
+func NewEWMABreaker(sampleCount int, threshold float64, halfOpenDelay time.Duration) *EWMABreaker {
+	e := &EWMABreaker{
 		// https://en.wikipedia.org/wiki/Exponential_smoothing
-		decay:       2 / (float64(sampleCount)/2 + 1),
-		threshold:   threshold,
-		triggerable: triggerable{halfOpenDelay: halfOpenDelay},
+		decay:     2 / (float64(sampleCount)/2 + 1),
+		threshold: threshold,
+		callable: callable{
+			halfOpenDelay: halfOpenDelay,
+		},
 	}
 
 	e.failureRate.Store(float64(math.SmallestNonzeroFloat64)) // start closed; also work around "initial value" problem
@@ -109,19 +115,37 @@ func NewEWMATrigger(sampleCount int, threshold float64, halfOpenDelay time.Durat
 	return e
 }
 
-func (e *EWMATrigger) Observe(failure bool) {
+func (e *EWMABreaker) Call() Observable {
+	switch e.callable.state() {
+	case stateClosed:
+		return observableFunc(func(failure bool) {
+			e.observe(false, failure)
+		})
+	case stateHalfOpen:
+		return observableFunc(func(failure bool) {
+			e.observe(true, failure)
+		})
+	case stateOpen:
+		return nil
+	default:
+		panic("hoglet: unknown state") // should not happen; see callable.state()
+	}
+}
+
+func (e *EWMABreaker) observe(halfOpen, failure bool) {
 	if e.threshold == 0 {
+		return
+	}
+
+	if !failure && halfOpen {
+		e.openedAt.Store(0)
+		e.failureRate.Store(e.threshold)
 		return
 	}
 
 	var value float64 = 0.0
 	if failure {
 		value = 1.0
-	}
-
-	if e.resetOnHalfOpen(failure) {
-		e.failureRate.Store(e.threshold)
-		return
 	}
 
 	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
@@ -134,46 +158,66 @@ func (e *EWMATrigger) Observe(failure bool) {
 	}
 
 	if failureRate > e.threshold {
-		e.triggeredAt.CompareAndSwap(0, time.Now().UnixMicro())
+		e.openedAt.CompareAndSwap(0, time.Now().UnixMicro())
 	} else {
-		e.triggeredAt.Store(0)
+		e.openedAt.Store(0)
 	}
 }
 
-// SlidingWindowTrigger is a [Trigger] that uses a sliding window to determine the error rate.
-type SlidingWindowTrigger struct {
+// SlidingWindowBreaker is a [Breaker] that uses a sliding window to determine the error rate.
+type SlidingWindowBreaker struct {
 	windowSize time.Duration
 	threshold  float64
 
 	// State
+
 	currentStart        atomic.Int64 // in unix microseconds
 	currentSuccessCount atomic.Int64
 	currentFailureCount atomic.Int64
 	lastSuccessCount    atomic.Int64
 	lastFailureCount    atomic.Int64
 
-	triggerable
+	callable
 }
 
-// NewSlidingWindowTrigger creates a new [SlidingWindowTrigger] with the given window size, threshold and half-open
-// delay.
+// NewSlidingWindowBreaker creates a new [SlidingWindowBreaker] with the given window size, failure rate threshold and
+// half-open delay.
 //
 // If no observations are made in the window, the breaker will default to closed.
 // This means: if halfOpenDelay is bigger than windowSize, the breaker will never enter half-open state and instead
 // directly close.
 // Conversely, if halfOpenDelay is smaller than windowSize, the errors observed in the last window will still count
 // proportionally in half-open state, which will lead to faster re-opening on errors.
-func NewSlidingWindowTrigger(windowSize time.Duration, threshold float64, halfOpenDelay time.Duration) *SlidingWindowTrigger {
-	s := &SlidingWindowTrigger{
-		windowSize:  windowSize,
-		threshold:   threshold,
-		triggerable: triggerable{halfOpenDelay: halfOpenDelay},
+func NewSlidingWindowBreaker(windowSize time.Duration, threshold float64, halfOpenDelay time.Duration) *SlidingWindowBreaker {
+	s := &SlidingWindowBreaker{
+		windowSize: windowSize,
+		threshold:  threshold,
+		callable: callable{
+			halfOpenDelay: halfOpenDelay,
+		},
 	}
 
 	return s
 }
 
-func (s *SlidingWindowTrigger) Observe(failure bool) {
+func (s *SlidingWindowBreaker) Call() Observable {
+	switch s.callable.state() {
+	case stateClosed:
+		return observableFunc(func(failure bool) {
+			s.observe(false, failure)
+		})
+	case stateHalfOpen:
+		return observableFunc(func(failure bool) {
+			s.observe(true, failure)
+		})
+	case stateOpen:
+		return nil
+	default:
+		panic("hoglet: unknown state") // should not happen; see callable.state()
+	}
+}
+
+func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
 	var (
 		lastFailureCount    int64
 		lastSuccessCount    int64
@@ -181,7 +225,8 @@ func (s *SlidingWindowTrigger) Observe(failure bool) {
 		currentSuccessCount int64
 	)
 
-	if s.resetOnHalfOpen(failure) {
+	if !failure && halfOpen {
+		s.openedAt.Store(0)
 		return
 	}
 
@@ -190,7 +235,7 @@ func (s *SlidingWindowTrigger) Observe(failure bool) {
 	if currentStartMicros := s.currentStart.Load(); sinceMicros(currentStartMicros) > s.windowSize && s.currentStart.CompareAndSwap(currentStartMicros, time.Now().UnixMicro()) {
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
-		s.triggeredAt.Store(0)
+		s.openedAt.Store(0)
 	} else {
 		lastFailureCount = s.lastFailureCount.Load()
 		lastSuccessCount = s.lastSuccessCount.Load()
@@ -213,9 +258,9 @@ func (s *SlidingWindowTrigger) Observe(failure bool) {
 	failureRate := weightedFailures / weightedTotal
 
 	if failureRate > s.threshold {
-		s.triggeredAt.CompareAndSwap(0, time.Now().UnixMicro())
+		s.openedAt.CompareAndSwap(0, time.Now().UnixMicro())
 	} else {
-		s.triggeredAt.Store(0)
+		s.openedAt.Store(0)
 	}
 }
 

@@ -1,11 +1,11 @@
 package hoglet
 
-type BreakerError struct {
+type Error struct {
 	msg string
 }
 
-func (b BreakerError) Error() string {
+func (b Error) Error() string {
 	return "hoglet: " + b.msg
 }
 
-var ErrBreakerOpen = BreakerError{msg: "breaker is open"}
+var ErrCircuitOpen = Error{msg: "breaker is open"}

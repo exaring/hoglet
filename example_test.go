@@ -20,10 +20,10 @@ func foo(ctx context.Context, bar int) (Foo, error) {
 	return Foo{}, fmt.Errorf("bar is not 42")
 }
 
-func ExampleEWMATrigger() {
-	h := hoglet.NewBreaker(
+func ExampleEWMABreaker() {
+	h := hoglet.NewCircuit(
 		foo,
-		hoglet.NewEWMATrigger(10, 0.1, 5*time.Second),
+		hoglet.NewEWMABreaker(10, 0.1, 5*time.Second),
 		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
 	f, err := h.Do(context.Background(), 42)
@@ -44,10 +44,10 @@ func ExampleEWMATrigger() {
 	// hoglet: breaker is open
 }
 
-func ExampleSlidingWindowTrigger() {
-	h := hoglet.NewBreaker(
+func ExampleSlidingWindowBreaker() {
+	h := hoglet.NewCircuit(
 		foo,
-		hoglet.NewSlidingWindowTrigger(10, 0.1, 5*time.Second),
+		hoglet.NewSlidingWindowBreaker(10, 0.1, 5*time.Second),
 		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
 	f, err := h.Do(context.Background(), 42)

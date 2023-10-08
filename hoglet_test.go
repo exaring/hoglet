@@ -33,9 +33,9 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 }
 
 func BenchmarkHoglet_Do_EWMA(b *testing.B) {
-	breaker := hoglet.NewBreaker(
+	breaker := hoglet.NewCircuit(
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
-		hoglet.NewEWMATrigger(10, 0.9, 2*time.Second),
+		hoglet.NewEWMABreaker(10, 0.9, 2*time.Second),
 	)
 
 	ctx := context.Background()
@@ -51,9 +51,9 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 }
 
 func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
-	breaker := hoglet.NewBreaker(
+	breaker := hoglet.NewCircuit(
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
-		hoglet.NewSlidingWindowTrigger(10*time.Second, 0.9, 2*time.Second),
+		hoglet.NewSlidingWindowBreaker(10*time.Second, 0.9, 2*time.Second),
 	)
 
 	ctx := context.Background()
@@ -69,40 +69,41 @@ func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 }
 
 func TestBreaker_zero_value_does_not_panic(t *testing.T) {
-	b := &hoglet.Breaker[struct{}, struct{}]{}
+	b := &hoglet.Circuit[struct{}, struct{}]{}
 	_, err := b.Do(context.Background(), struct{}{})
 	assert.NoError(t, err)
 }
 
 func TestBreaker_nil_trigger_does_not_open(t *testing.T) {
-	b := hoglet.NewBreaker(noop, nil)
+	b := hoglet.NewCircuit(noop, nil)
 	_, err := b.Do(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
 	_, err = b.Do(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
 }
 
-// mockTrigger is a mock implementation of the Trigger interface that opens or closes depending on the last observed
+// mockBreaker is a mock implementation of the Trigger interface that opens or closes depending on the last observed
 // failure.
-type mockTrigger struct {
-	state hoglet.State
+type mockBreaker struct {
+	open bool
 }
 
-// Observe implements hoglet.Trigger
-func (mt *mockTrigger) Observe(failure bool) {
-	if failure {
-		mt.state = hoglet.StateOpen
+// Observe implements hoglet.Breaker
+func (mt *mockBreaker) Call() hoglet.Observable {
+	if mt.open {
+		return nil
 	} else {
-		mt.state = hoglet.StateClosed
+		return &mockObservable{breaker: mt}
 	}
 }
 
-// State implements hoglet.Trigger
-func (mt *mockTrigger) State() hoglet.State {
-	return mt.state
+type mockObservable struct {
+	breaker *mockBreaker
 }
 
-var _ hoglet.Trigger = (*mockTrigger)(nil)
+func (mo *mockObservable) Observe(failure bool) {
+	mo.breaker.open = failure
+}
 
 func TestHoglet_Do(t *testing.T) {
 	type calls struct {
@@ -128,7 +129,7 @@ func TestHoglet_Do(t *testing.T) {
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInFailure, wantErr: sentinel},
-				{arg: noopInSuccess, wantErr: hoglet.ErrBreakerOpen},
+				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
 			},
 		},
 		{
@@ -136,7 +137,7 @@ func TestHoglet_Do(t *testing.T) {
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInPanic, wantErr: nil, wantPanic: "boom"},
-				{arg: noopInSuccess, wantErr: hoglet.ErrBreakerOpen},
+				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
 			},
 		},
 		{
@@ -154,7 +155,7 @@ func TestHoglet_Do(t *testing.T) {
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInFailure, wantErr: sentinel},
 				{arg: noopInFailure, wantErr: sentinel, halfOpen: true},
-				{arg: noopInSuccess, wantErr: hoglet.ErrBreakerOpen},
+				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
 			},
 		},
 	}
@@ -164,11 +165,11 @@ func TestHoglet_Do(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			mt := &mockTrigger{state: hoglet.StateClosed}
-			h := hoglet.NewBreaker(noop, mt)
+			mt := &mockBreaker{}
+			h := hoglet.NewCircuit(noop, mt)
 			for i, c := range tt.calls {
 				if c.halfOpen {
-					mt.state = hoglet.StateHalfOpen
+					mt.open = false
 				}
 
 				var err error

@@ -6,41 +6,41 @@ import (
 	"sync"
 )
 
-// Breaker wraps a function and behaves like a circuit breaker: it triggers (opens) when the wrapped function fails and
-// stops calling the wrapped function until it closes again, returning [ErrBreakerOpen] in the meantime.
+// Circuit wraps a function and behaves like a simple circuit and breaker: it opens when the wrapped function fails and
+// stops calling the wrapped function until it closes again, returning [ErrCircuitOpen] in the meantime.
 //
-// A zero breaker will not panic, but wraps a noop. Use [NewBreaker] instead.
-type Breaker[IN, OUT any] struct {
+// A zero circuit will not panic, but wraps a noop. Use [NewBreaker] instead.
+type Circuit[IN, OUT any] struct {
 	f       BreakableFunc[IN, OUT]
-	trigger Trigger
+	breaker Breaker
 	options options
 }
 
-// We use a sub-struct to avoid requiring type parameters in [Option].
+// options is a sub-struct to avoid requiring type parameters in the [Option] type.
 type options struct {
 	// isFailure is a filter function that determines whether an error can open the breaker.
 	isFailure func(error) bool
 }
 
-// Trigger is the interface implemented by the different
-type Trigger interface {
-	// State returns the current state of the breaker.
-	// It is called exactly once per call to [Do], before calling the wrapped function.
-	State() State
-	// Observe will only be called if [State] returns StateOpen or StateHalfOpen.
-	// It is called at most once per call to [Do], after calling the wrapped function, depending on the breaker state.
-	Observe(failure bool)
+// Breaker is the interface implemented by the different triggers, responsible for actually opening the circuit.
+// Each implementation behaves differently when deciding whether to open the breaker upon failure.
+type Breaker interface {
+	// Call attempts to call the wrapped function.
+	// It is called exactly once per call to [Breaker.Do], before calling the wrapped function.
+	// If the trigger is open, it returns nil.
+	// If the trigger is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
+	Call() Observable
 }
 
 // BreakableFunc is the type of the function wrapped by a Breaker.
 type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
 
-// NewBreaker instantiates a new breaker that wraps the given function. See [Do] for calling semantics.
-// A Breaker with a nil trigger will never open.
-func NewBreaker[IN, OUT any](f BreakableFunc[IN, OUT], trigger Trigger, opts ...Option) *Breaker[IN, OUT] {
-	b := &Breaker[IN, OUT]{
+// NewCircuit instantiates a new breaker that wraps the given function. See [Do] for calling semantics.
+// A Circuit with a nil breaker will never open.
+func NewCircuit[IN, OUT any](f BreakableFunc[IN, OUT], breaker Breaker, opts ...Option) *Circuit[IN, OUT] {
+	b := &Circuit[IN, OUT]{
 		f:       f,
-		trigger: trigger,
+		breaker: breaker,
 		options: options{
 			isFailure: defaultFailureCondition,
 		},
@@ -53,64 +53,66 @@ func NewBreaker[IN, OUT any](f BreakableFunc[IN, OUT], trigger Trigger, opts ...
 	return b
 }
 
-// Do calls the wrapped function and returns its result. If the breaker is open, it returns [ErrBreakerOpen].
+// Do calls the wrapped function and returns its result. If the circuit is open, it returns [ErrCircuitOpen].
 //
 // The wrapped function is called synchronously, but possilble context errors are recorded as soon as they occur. This
-// ensures the breaker opens quickly, even if the wrapped function blocks.
+// ensures the circuit opens quickly, even if the wrapped function blocks.
 //
 // By default, all errors are considered failures (including [context.Canceled]), but this can be customized via
 // [WithFailureCondition] and [IgnoreContextCancelation].
 //
-// Panics are observed as failures, but are not recovered.
-func (b *Breaker[IN, OUT]) Do(ctx context.Context, in IN) (out OUT, err error) {
+// Panics are observed as failures, but are not recovered ("repanicked").
+func (b *Circuit[IN, OUT]) Do(ctx context.Context, in IN) (out OUT, err error) {
 	if b.f == nil {
 		return out, nil
 	}
 
-	if b.isOpen() {
-		return out, ErrBreakerOpen
+	obs := b.observable()
+	if obs == nil {
+		return out, ErrCircuitOpen
 	}
 
 	once := &sync.Once{}
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(internalCancellation)
-	go b.observeCtxOnce(once, ctx)
+	go b.observeCtxOnce(once, obs, ctx)
 
 	defer func() {
 		// ensure we also open the breaker on panics
 		if err := recover(); err != nil {
-			b.observeOnce(once, true)
+			b.observeOnce(once, obs, true)
 			panic(err) // let the caller deal with panics
 		}
-		b.observeOnce(once, b.options.isFailure(err))
+		b.observeOnce(once, obs, b.options.isFailure(err))
 	}()
 
 	return b.f(ctx, in)
 }
 
-func (b *Breaker[IN, OUT]) isOpen() bool {
-	if b.trigger == nil {
-		return false
+func (b *Circuit[IN, OUT]) observable() Observable {
+	if b.breaker == nil {
+		return noopObserveable{}
 	}
-	return b.trigger.State() == StateOpen
+	return b.breaker.Call()
 }
 
-// Helper to work around the inherent racyness of the "context watch" goroutine and ensure we only observe one result.
-func (b *Breaker[IN, OUT]) observeOnce(once *sync.Once, failure bool) {
+// observeOnce is a helper to work around the inherent racyness of the "context watch" goroutine and ensure we only
+// observe one result.
+func (b *Circuit[IN, OUT]) observeOnce(once *sync.Once, obs Observable, failure bool) {
 	once.Do(func() {
-		if b.trigger == nil {
+		if b.breaker == nil {
 			return
 		}
 
-		b.trigger.Observe(failure)
+		obs.Observe(failure)
 	})
 }
 
 // internalCancellation is used to distinguish between internal and external (to the lib) context cancellations.
 var internalCancellation = errors.New("internal cancellation")
 
-func (b *Breaker[IN, OUT]) observeCtxOnce(once *sync.Once, ctx context.Context) {
+func (b *Circuit[IN, OUT]) observeCtxOnce(once *sync.Once, obs Observable, ctx context.Context) {
 	// We want to observe a context error as soon as possible to open the breaker, but at the same time we want to
 	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
 	<-ctx.Done()
@@ -119,9 +121,15 @@ func (b *Breaker[IN, OUT]) observeCtxOnce(once *sync.Once, ctx context.Context) 
 	if context.Cause(ctx) == internalCancellation {
 		err = nil // ignore internal cancellations; the wrapped function returned already
 	}
-	b.observeOnce(once, b.options.isFailure(err))
+	b.observeOnce(once, obs, b.options.isFailure(err))
 }
 
+// defaultFailureCondition is the default failure condition used by [NewCircuit].
+// It consider any non-nil error a failure.
 func defaultFailureCondition(err error) bool {
 	return err != nil
 }
+
+type noopObserveable struct{}
+
+func (noopObserveable) Observe(bool) {}
