@@ -29,12 +29,12 @@ func (s state) String() string {
 }
 
 type Observable interface {
-	// Observe is called after the wrapped function returns. If [Breaker.Do] returns a non-nil [Observable], it will be
+	// Observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observable], it will be
 	// called exactly once.
 	Observe(failure bool)
 }
 
-// callable encapsulates the common open/half-open/closed logic for all triggers. Each trigger implements decision of
+// callable encapsulates the common open/half-open/closed logic for all breakers. Each breaker implements decision of
 // *when* to open based on its own state.
 type callable struct {
 	halfOpenDelay time.Duration

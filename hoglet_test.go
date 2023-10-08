@@ -74,7 +74,7 @@ func TestBreaker_zero_value_does_not_panic(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestBreaker_nil_trigger_does_not_open(t *testing.T) {
+func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
 	b := hoglet.NewCircuit(noop, nil)
 	_, err := b.Do(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
@@ -82,7 +82,7 @@ func TestBreaker_nil_trigger_does_not_open(t *testing.T) {
 	assert.Equal(t, sentinel, err)
 }
 
-// mockBreaker is a mock implementation of the Trigger interface that opens or closes depending on the last observed
+// mockBreaker is a mock implementation of the [Breaker] interface that opens or closes depending on the last observed
 // failure.
 type mockBreaker struct {
 	open bool
@@ -108,7 +108,7 @@ func (mo *mockObservable) Observe(failure bool) {
 func TestHoglet_Do(t *testing.T) {
 	type calls struct {
 		arg       noopIn
-		halfOpen  bool // put the trigger in the half-open state BEFORE calling
+		halfOpen  bool // put the breaker in the half-open state BEFORE calling
 		wantErr   error
 		wantPanic any
 	}

@@ -201,14 +201,14 @@ func TestBreaker_Observe_State(t *testing.T) {
 							if o != nil {
 								o.Observe(failure)
 							} else {
-								b.observe(false, failure) // we're testing just the trigger
+								b.observe(false, failure) // we're testing just the breaker
 							}
 							t.Logf("%s: sample %d: failure %v: failureRate %f => %v", tt.name, i, failure, b.failureRate.Load(), b.state())
 						case *SlidingWindowBreaker:
 							if o != nil {
 								o.Observe(failure)
 							} else {
-								b.observe(false, failure) // we're testing just the trigger
+								b.observe(false, failure) // we're testing just the breaker
 							}
 							t.Logf("%s: sample %d: failure %v: => %v", tt.name, i, failure, b.state())
 						}

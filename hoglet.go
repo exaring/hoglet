@@ -22,13 +22,13 @@ type options struct {
 	isFailure func(error) bool
 }
 
-// Breaker is the interface implemented by the different triggers, responsible for actually opening the circuit.
+// Breaker is the interface implemented by the different breakers, responsible for actually opening the circuit.
 // Each implementation behaves differently when deciding whether to open the breaker upon failure.
 type Breaker interface {
 	// Call attempts to call the wrapped function.
 	// It is called exactly once per call to [Breaker.Do], before calling the wrapped function.
-	// If the trigger is open, it returns nil.
-	// If the trigger is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
+	// If the breaker is open, it returns nil.
+	// If the breaker is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
 	Call() Observable
 }
 
