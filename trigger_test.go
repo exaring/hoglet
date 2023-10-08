@@ -8,18 +8,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEWMATrigger_zero_value_does_not_open(t *testing.T) {
-	o := &EWMATrigger{}
+func TestEWMABreaker_zero_value_does_not_open(t *testing.T) {
+	b := &EWMABreaker{}
+	o := b.Call()
+	assert.NotNil(t, o)
 	o.Observe(true)
-	assert.Equal(t, StateClosed, o.State())
+	assert.NotNil(t, b.Call())
 }
 
-func TestEWMATrigger_zero_value_does_not_panic(t *testing.T) {
-	o := &EWMATrigger{}
-	assert.NotPanics(t, func() { o.State() })
+func TestEWMABreaker_zero_value_does_not_panic(t *testing.T) {
+	b := &EWMABreaker{}
+	assert.NotPanics(t, func() { b.Call() })
 }
 
-func TestEWMATrigger_Observe_State(t *testing.T) {
+func TestBreaker_Observe_State(t *testing.T) {
 	halfOpenDelay := 500 * time.Millisecond
 	// helper functions to make tests stages more readable
 	alwaysFailure := func(int) bool { return true }
@@ -30,114 +32,114 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 		failureFunc func(int) bool
 	}
 	tests := []struct {
-		name      string
-		triggers  []Trigger
-		stages    []stages
-		wantState State
+		name     string
+		breakers map[string]Breaker
+		stages   []stages
+		wantCall bool
 	}{
 		{
 			name: "start closed",
-			triggers: []Trigger{
-				NewEWMATrigger(10, 0.3, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.3, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(10, 0.3, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.3, halfOpenDelay),
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "always success",
-			triggers: []Trigger{
-				NewEWMATrigger(10, 0.3, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.3, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(10, 0.3, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.3, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "always failure",
-			triggers: []Trigger{
-				NewEWMATrigger(10, 0.9, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.9, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(10, 0.9, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.9, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 		{
 			name: "start open; finish closed",
-			triggers: []Trigger{
-				NewEWMATrigger(10, 0.2, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma": NewEWMABreaker(10, 0.2, halfOpenDelay),
 				// sliding window is not affected by ordering
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 100, failureFunc: alwaysSuccessful},
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "start closed; finish open",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.4, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma": NewEWMABreaker(50, 0.4, halfOpenDelay),
 				// sliding window is not affected by ordering
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 		{
 			name: "just above threshold opens",
-			triggers: []Trigger{
-				NewSlidingWindowTrigger(10*time.Second, 0.5, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.5, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
 				{calls: 101, failureFunc: alwaysFailure},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 		{
 			name: "just below threshold stays closed",
-			triggers: []Trigger{
-				NewSlidingWindowTrigger(10*time.Second, 0.5, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.5, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 101, failureFunc: alwaysSuccessful},
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "constant low failure rate stays mostly closed (EWMA flaky)",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.2, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.2, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(50, 0.2, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }},
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "constant high failure rate stays mostly open (EWMA flaky)",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.2, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.2, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(50, 0.2, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 		{
 			name: "single success at half-open enough to close",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.1, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(50, 0.1, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -146,13 +148,13 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 					return false
 				}},
 			},
-			wantState: StateClosed,
+			wantCall: true,
 		},
 		{
 			name: "single failure at half-open keeps open",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.1, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(50, 0.1, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -161,15 +163,15 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 					return true
 				}},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 		{
 			// we want to re-open fast if we closed on a fluke (to avoid thundering herd agains a service that might be
 			// close to capacity and therefore failing intermittently)
 			name: "single failure after reopen closes",
-			triggers: []Trigger{
-				NewEWMATrigger(50, 0.1, halfOpenDelay),
-				NewSlidingWindowTrigger(10*time.Second, 0.1, halfOpenDelay),
+			breakers: map[string]Breaker{
+				"ewma":          NewEWMABreaker(50, 0.1, halfOpenDelay),
+				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1, halfOpenDelay),
 			},
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
@@ -179,24 +181,44 @@ func TestEWMATrigger_Observe_State(t *testing.T) {
 				}},
 				{calls: 1, failureFunc: alwaysFailure},
 			},
-			wantState: StateOpen,
+			wantCall: false,
 		},
 	}
 	for _, tt := range tests {
 		tt := tt
-		for _, ttt := range tt.triggers {
-			ttt := ttt
-			t.Run(tt.name, func(t *testing.T) {
+		for bName, b := range tt.breakers {
+			b := b
+			t.Run(bName+": "+tt.name, func(t *testing.T) {
 				t.Parallel()
 
 				for _, s := range tt.stages {
 					for i := 0; i < s.calls; i++ {
 						failure := s.failureFunc(i)
-						ttt.Observe(failure)
-						// t.Logf("%s: sample %d: failure %v: successRate %f => %v", tt.name, i, failure, e.successRate.Load(), e.State())
+						o := b.Call()
+
+						switch b := b.(type) {
+						case *EWMABreaker:
+							if o != nil {
+								o.Observe(failure)
+							} else {
+								b.observe(false, failure) // we're testing just the trigger
+							}
+							t.Logf("%s: sample %d: failure %v: failureRate %f => %v", tt.name, i, failure, b.failureRate.Load(), b.state())
+						case *SlidingWindowBreaker:
+							if o != nil {
+								o.Observe(failure)
+							} else {
+								b.observe(false, failure) // we're testing just the trigger
+							}
+							t.Logf("%s: sample %d: failure %v: => %v", tt.name, i, failure, b.state())
+						}
 					}
 				}
-				assert.Equal(t, tt.wantState, ttt.State())
+				if tt.wantCall {
+					assert.NotNil(t, b.Call())
+				} else {
+					assert.Nil(t, b.Call())
+				}
 			})
 		}
 	}
