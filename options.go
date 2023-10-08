@@ -14,7 +14,7 @@ func (f optionFunc) apply(o *options) {
 
 // WithFailureCondition allows specifying a filter function that determines whether an error should open the breaker.
 // If the provided function returns true, the error is considered a failure and the breaker may open (depending on the
-// trigger logic).
+// breaker logic).
 // The default filter considers all non-nil errors as failures (err != nil).
 func WithFailureCondition(condition func(error) bool) Option {
 	return optionFunc(func(b *options) {

@@ -9,14 +9,14 @@ Simple low-overhead circuit breaker library.
 ## Usage
 
 ```go
-h := hoglet.NewBreaker(
+h := hoglet.NewCircuit(
     func(ctx context.Context, bar int) (Foo, error) {
         if bar == 42 {
             return Foo{Bar: bar}, nil
         }
         return Foo{}, fmt.Errorf("bar is not 42")
     },
-    hoglet.NewSlidingWindowTrigger(10, 0.1, 5*time.Second),
+    hoglet.NewSlidingWindowBreaker(10, 0.1, 5*time.Second),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 )
 f, _ := h.Do(context.Background(), 42)
