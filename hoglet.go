@@ -3,7 +3,6 @@ package hoglet
 import (
 	"context"
 	"errors"
-	"sync"
 )
 
 // Circuit wraps a function and behaves like a simple circuit and breaker: it opens when the wrapped function fails and
@@ -72,19 +71,17 @@ func (b *Circuit[IN, OUT]) Do(ctx context.Context, in IN) (out OUT, err error) {
 		return out, ErrCircuitOpen
 	}
 
-	once := &sync.Once{}
-
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(internalCancellation)
-	go b.observeCtxOnce(once, obs, ctx)
+	go b.observeCtx(obs, ctx)
 
 	defer func() {
 		// ensure we also open the breaker on panics
 		if err := recover(); err != nil {
-			b.observeOnce(once, obs, true)
+			obs.Observe(true)
 			panic(err) // let the caller deal with panics
 		}
-		b.observeOnce(once, obs, b.options.isFailure(err))
+		obs.Observe(b.options.isFailure(err))
 	}()
 
 	return b.f(ctx, in)
@@ -97,22 +94,12 @@ func (b *Circuit[IN, OUT]) observable() Observable {
 	return b.breaker.Call()
 }
 
-// observeOnce is a helper to work around the inherent racyness of the "context watch" goroutine and ensure we only
-// observe one result.
-func (b *Circuit[IN, OUT]) observeOnce(once *sync.Once, obs Observable, failure bool) {
-	once.Do(func() {
-		if b.breaker == nil {
-			return
-		}
-
-		obs.Observe(failure)
-	})
-}
-
 // internalCancellation is used to distinguish between internal and external (to the lib) context cancellations.
 var internalCancellation = errors.New("internal cancellation")
 
-func (b *Circuit[IN, OUT]) observeCtxOnce(once *sync.Once, obs Observable, ctx context.Context) {
+// observeCtx observes the given context for cancellation and records it as a failure.
+// It assumes [Observable.Observe] is idempotent and deduplicates calls itself.
+func (b *Circuit[IN, OUT]) observeCtx(obs Observable, ctx context.Context) {
 	// We want to observe a context error as soon as possible to open the breaker, but at the same time we want to
 	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
 	<-ctx.Done()
@@ -121,7 +108,7 @@ func (b *Circuit[IN, OUT]) observeCtxOnce(once *sync.Once, obs Observable, ctx c
 	if context.Cause(ctx) == internalCancellation {
 		err = nil // ignore internal cancellations; the wrapped function returned already
 	}
-	b.observeOnce(once, obs, b.options.isFailure(err))
+	obs.Observe(b.options.isFailure(err))
 }
 
 // defaultFailureCondition is the default failure condition used by [NewCircuit].

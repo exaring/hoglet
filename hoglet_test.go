@@ -3,6 +3,7 @@ package hoglet_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,10 +100,13 @@ func (mt *mockBreaker) Call() hoglet.Observable {
 
 type mockObservable struct {
 	breaker *mockBreaker
+	once    sync.Once
 }
 
 func (mo *mockObservable) Observe(failure bool) {
-	mo.breaker.open = failure
+	mo.once.Do(func() {
+		mo.breaker.open = failure
+	})
 }
 
 func TestHoglet_Do(t *testing.T) {
