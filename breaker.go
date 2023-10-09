@@ -2,6 +2,7 @@ package hoglet
 
 import (
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -67,9 +68,21 @@ func (c *callable) state() state {
 	return stateHalfOpen
 }
 
-type observableFunc func(failure bool)
+// newObservableCall creates a new [Observable] that ensure it can only be observed a single time.
+func newObservableCall(f func(bool)) Observable {
+	o := sync.Once{}
+	return observableCall(func(failure bool) {
+		o.Do(func() {
+			f(failure)
+		})
+	})
+}
 
-func (o observableFunc) Observe(failure bool) {
+// observableCall tracks a single call through the breaker.
+// It should be instantiated via [newObservableCall] to ensure the observer is only called once.
+type observableCall func(bool)
+
+func (o observableCall) Observe(failure bool) {
 	o(failure)
 }
 
@@ -116,20 +129,15 @@ func NewEWMABreaker(sampleCount int, threshold float64, halfOpenDelay time.Durat
 }
 
 func (e *EWMABreaker) Call() Observable {
-	switch e.callable.state() {
-	case stateClosed:
-		return observableFunc(func(failure bool) {
-			e.observe(false, failure)
-		})
-	case stateHalfOpen:
-		return observableFunc(func(failure bool) {
-			e.observe(true, failure)
-		})
-	case stateOpen:
+	state := e.callable.state()
+
+	if state == stateOpen {
 		return nil
-	default:
-		panic("hoglet: unknown state") // should not happen; see callable.state()
 	}
+
+	return newObservableCall(func(failure bool) {
+		e.observe(state == stateHalfOpen, failure)
+	})
 }
 
 func (e *EWMABreaker) observe(halfOpen, failure bool) {
@@ -201,20 +209,15 @@ func NewSlidingWindowBreaker(windowSize time.Duration, threshold float64, halfOp
 }
 
 func (s *SlidingWindowBreaker) Call() Observable {
-	switch s.callable.state() {
-	case stateClosed:
-		return observableFunc(func(failure bool) {
-			s.observe(false, failure)
-		})
-	case stateHalfOpen:
-		return observableFunc(func(failure bool) {
-			s.observe(true, failure)
-		})
-	case stateOpen:
+	state := s.callable.state()
+
+	if state == stateOpen {
 		return nil
-	default:
-		panic("hoglet: unknown state") // should not happen; see callable.state()
 	}
+
+	return newObservableCall(func(failure bool) {
+		s.observe(state == stateHalfOpen, failure)
+	})
 }
 
 func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
