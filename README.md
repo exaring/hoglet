@@ -16,15 +16,32 @@ h := hoglet.NewCircuit(
         }
         return Foo{}, fmt.Errorf("bar is not 42")
     },
-    hoglet.NewSlidingWindowBreaker(10, 0.1, 5*time.Second),
+    hoglet.NewSlidingWindowBreaker(10, 0.1),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 )
-f, _ := h.Do(context.Background(), 42)
+f, _ := h.Call(context.Background(), 42)
 fmt.Println(f.Bar) // 42
 
-_, err = h.Do(context.Background(), 0)
+_, err = h.Call(context.Background(), 0)
 fmt.Println(err) // bar is not 42
 
-_, err = h.Do(context.Background(), 42)
+_, err = h.Call(context.Background(), 42)
 fmt.Println(err) // hoglet: breaker is open
 ```
+
+## Operation
+
+Each call to the wrapped function (via `Circuit.Call`) is tracked and its result "observed". Breakers then react to
+these observations according to their own logic, optionally opening the circuit.
+
+An open circuit does not allow any calls to go through, and will return an error immediately.
+
+If the wrapped function blocks, `Circuit.Call` will block as well, but any context cancelations or expirations will
+count towards the failure rate, allowing the circuit to respond timely to failures, while still having well-defined and
+non-racy behavior around the failed function.
+
+
+## Design
+
+Hoglet prefers throughput to correctness (e.g. by avoiding locks), which means it cannot guarantee an exact number of
+calls will go through.
