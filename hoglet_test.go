@@ -1,4 +1,4 @@
-package hoglet_test
+package hoglet
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/exaring/hoglet"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,9 +33,9 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 }
 
 func BenchmarkHoglet_Do_EWMA(b *testing.B) {
-	breaker := hoglet.NewCircuit(
+	breaker := NewCircuit(
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
-		hoglet.NewEWMABreaker(10, 0.9, 2*time.Second),
+		NewEWMABreaker(10, 0.9),
 	)
 
 	ctx := context.Background()
@@ -46,15 +45,15 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _ = breaker.Do(ctx, struct{}{})
+			_, _ = breaker.Call(ctx, struct{}{})
 		}
 	})
 }
 
 func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
-	breaker := hoglet.NewCircuit(
+	breaker := NewCircuit(
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
-		hoglet.NewSlidingWindowBreaker(10*time.Second, 0.9, 2*time.Second),
+		NewSlidingWindowBreaker(10*time.Second, 0.9),
 	)
 
 	ctx := context.Background()
@@ -64,22 +63,22 @@ func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _ = breaker.Do(ctx, struct{}{})
+			_, _ = breaker.Call(ctx, struct{}{})
 		}
 	})
 }
 
 func TestBreaker_zero_value_does_not_panic(t *testing.T) {
-	b := &hoglet.Circuit[struct{}, struct{}]{}
-	_, err := b.Do(context.Background(), struct{}{})
+	b := &Circuit[struct{}, struct{}]{}
+	_, err := b.Call(context.Background(), struct{}{})
 	assert.NoError(t, err)
 }
 
 func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
-	b := hoglet.NewCircuit(noop, nil)
-	_, err := b.Do(context.Background(), noopInFailure)
+	b := NewCircuit(noop, nil)
+	_, err := b.Call(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
-	_, err = b.Do(context.Background(), noopInFailure)
+	_, err = b.Call(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
 }
 
@@ -89,8 +88,8 @@ type mockBreaker struct {
 	open bool
 }
 
-// Observe implements hoglet.Breaker
-func (mt *mockBreaker) Call() hoglet.Observable {
+// observerForCall implements [Breaker]
+func (mt *mockBreaker) observerForCall() observer {
 	if mt.open {
 		return nil
 	} else {
@@ -98,12 +97,16 @@ func (mt *mockBreaker) Call() hoglet.Observable {
 	}
 }
 
+// connect implements [Breaker]
+func (mt *mockBreaker) connect(untypedCircuit) {}
+
 type mockObservable struct {
 	breaker *mockBreaker
 	once    sync.Once
 }
 
-func (mo *mockObservable) Observe(failure bool) {
+// observe implements [Observer]
+func (mo *mockObservable) observe(failure bool) {
 	mo.once.Do(func() {
 		mo.breaker.open = failure
 	})
@@ -133,7 +136,7 @@ func TestHoglet_Do(t *testing.T) {
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInFailure, wantErr: sentinel},
-				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
+				{arg: noopInSuccess, wantErr: ErrCircuitOpen},
 			},
 		},
 		{
@@ -141,7 +144,7 @@ func TestHoglet_Do(t *testing.T) {
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInPanic, wantErr: nil, wantPanic: "boom"},
-				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
+				{arg: noopInSuccess, wantErr: ErrCircuitOpen},
 			},
 		},
 		{
@@ -159,7 +162,7 @@ func TestHoglet_Do(t *testing.T) {
 				{arg: noopInSuccess, wantErr: nil},
 				{arg: noopInFailure, wantErr: sentinel},
 				{arg: noopInFailure, wantErr: sentinel, halfOpen: true},
-				{arg: noopInSuccess, wantErr: hoglet.ErrCircuitOpen},
+				{arg: noopInSuccess, wantErr: ErrCircuitOpen},
 			},
 		},
 	}
@@ -170,7 +173,7 @@ func TestHoglet_Do(t *testing.T) {
 			t.Parallel()
 
 			mt := &mockBreaker{}
-			h := hoglet.NewCircuit(noop, mt)
+			h := NewCircuit(noop, mt)
 			for i, c := range tt.calls {
 				if c.halfOpen {
 					mt.open = false
@@ -184,7 +187,7 @@ func TestHoglet_Do(t *testing.T) {
 					}
 				}
 				maybeAssertPanic(t, func() {
-					_, err = h.Do(context.Background(), c.arg)
+					_, err = h.Call(context.Background(), c.arg)
 				})
 				assert.Equal(t, c.wantErr, err, "unexpected error on call %d: %v", i, err)
 			}

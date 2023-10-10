@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/exaring/hoglet"
 )
@@ -23,19 +22,19 @@ func foo(ctx context.Context, bar int) (Foo, error) {
 func ExampleEWMABreaker() {
 	h := hoglet.NewCircuit(
 		foo,
-		hoglet.NewEWMABreaker(10, 0.1, 5*time.Second),
+		hoglet.NewEWMABreaker(10, 0.1),
 		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
-	f, err := h.Do(context.Background(), 42)
+	f, err := h.Call(context.Background(), 42)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(f.Bar)
 
-	_, err = h.Do(context.Background(), 0)
+	_, err = h.Call(context.Background(), 0)
 	fmt.Println(err)
 
-	_, err = h.Do(context.Background(), 42)
+	_, err = h.Call(context.Background(), 42)
 	fmt.Println(err)
 
 	// Output:
@@ -47,19 +46,19 @@ func ExampleEWMABreaker() {
 func ExampleSlidingWindowBreaker() {
 	h := hoglet.NewCircuit(
 		foo,
-		hoglet.NewSlidingWindowBreaker(10, 0.1, 5*time.Second),
+		hoglet.NewSlidingWindowBreaker(10, 0.1),
 		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
-	f, err := h.Do(context.Background(), 42)
+	f, err := h.Call(context.Background(), 42)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(f.Bar)
 
-	_, err = h.Do(context.Background(), 0)
+	_, err = h.Call(context.Background(), 0)
 	fmt.Println(err)
 
-	_, err = h.Do(context.Background(), 42)
+	_, err = h.Call(context.Background(), 42)
 	fmt.Println(err)
 
 	// Output:
