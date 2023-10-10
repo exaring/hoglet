@@ -1,8 +1,8 @@
 package hoglet
 
 import (
+	"context"
 	"math"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,16 +17,6 @@ type observer interface {
 	// observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observable], it will be
 	// called exactly once.
 	observe(failure bool)
-}
-
-// newObservableCall creates a new [Observable] that ensures it can only be observed a single time.
-func newObservableCall(f func(bool)) observer {
-	o := sync.Once{}
-	return observableCall(func(failure bool) {
-		o.Do(func() {
-			f(failure)
-		})
-	})
 }
 
 // observableCall tracks a single call through the breaker.
@@ -80,16 +70,16 @@ func (e *EWMABreaker) connect(c untypedCircuit) {
 	e.circuit = c
 }
 
-func (e *EWMABreaker) observerForCall() observer {
+func (e *EWMABreaker) observerForCall(_ context.Context) (observer, error) {
 	state := e.circuit.stateForCall()
 
 	if state == StateOpen {
-		return nil
+		return nil, ErrCircuitOpen
 	}
 
-	return newObservableCall(func(failure bool) {
+	return observableCall(func(failure bool) {
 		e.observe(state == StateHalfOpen, failure)
-	})
+	}), nil
 }
 
 func (e *EWMABreaker) observe(halfOpen, failure bool) {
@@ -164,16 +154,16 @@ func (s *SlidingWindowBreaker) connect(c untypedCircuit) {
 	s.circuit = c
 }
 
-func (s *SlidingWindowBreaker) observerForCall() observer {
+func (s *SlidingWindowBreaker) observerForCall(_ context.Context) (observer, error) {
 	state := s.circuit.stateForCall()
 
 	if state == StateOpen {
-		return nil
+		return nil, ErrCircuitOpen
 	}
 
-	return newObservableCall(func(failure bool) {
+	return observableCall(func(failure bool) {
 		s.observe(state == StateHalfOpen, failure)
-	})
+	}), nil
 }
 
 func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {

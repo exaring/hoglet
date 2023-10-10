@@ -83,11 +83,11 @@ type mockBreaker struct {
 }
 
 // observerForCall implements [Breaker]
-func (mt *mockBreaker) observerForCall() observer {
+func (mt *mockBreaker) observerForCall(context.Context) (observer, error) {
 	if mt.open {
-		return nil
+		return nil, ErrCircuitOpen
 	} else {
-		return &mockObservable{breaker: mt}
+		return &mockObservable{breaker: mt}, nil
 	}
 }
 
@@ -102,7 +102,9 @@ type mockObservable struct {
 // observe implements [Observer]
 func (mo *mockObservable) observe(failure bool) {
 	mo.once.Do(func() {
-		mo.breaker.open = failure
+		if mo.breaker != nil {
+			mo.breaker.open = failure
+		}
 	})
 }
 

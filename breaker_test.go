@@ -1,6 +1,7 @@
 package hoglet
 
 import (
+	"context"
 	"math/rand"
 	"testing"
 	"time"
@@ -12,16 +13,19 @@ import (
 func TestEWMABreaker_zero_value_does_not_open(t *testing.T) {
 	b := &EWMABreaker{}
 	b.connect(&mockCircuit{})
-	o := b.observerForCall()
-	require.NotNil(t, o)
+	o, err := b.observerForCall(context.TODO())
+	require.NoError(t, err)
 	o.observe(true)
-	assert.NotNil(t, b.observerForCall())
+	_, err = b.observerForCall(context.TODO())
+	assert.NoError(t, err)
 }
 
 func TestEWMABreaker_zero_value_does_not_panic(t *testing.T) {
 	b := &EWMABreaker{}
 	b.connect(&mockCircuit{})
-	assert.NotPanics(t, func() { b.observerForCall() })
+	assert.NotPanics(t, func() {
+		b.observerForCall(context.TODO()) // nolint: errcheck // we are just interested in the panic
+	})
 }
 
 func TestBreaker_Observe_State(t *testing.T) {
@@ -193,7 +197,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 							c.setState(StateHalfOpen)
 						}
 						failure := s.failureFunc(i)
-						o := b.observerForCall()
+						o, _ := b.observerForCall(context.TODO()) // nolint: errcheck // always observe
 
 						switch b := b.(type) {
 						case *EWMABreaker:
@@ -213,10 +217,11 @@ func TestBreaker_Observe_State(t *testing.T) {
 						}
 					}
 				}
+				_, err := b.observerForCall(context.TODO())
 				if tt.wantCall {
-					assert.NotNil(t, b.observerForCall())
+					assert.NoError(t, err)
 				} else {
-					assert.Nil(t, b.observerForCall())
+					assert.ErrorIs(t, err, ErrCircuitOpen)
 				}
 			})
 		}

@@ -37,3 +37,14 @@ func WithFailureCondition(condition func(error) bool) Option {
 func IgnoreContextCancelation(err error) bool {
 	return err != nil && err != context.Canceled
 }
+
+// WithConcurrencyLimit sets the maximum number of concurrent calls to the provided limit. If the limit is reached, the
+// circuit's behavior depends on the blocking parameter:
+//   - it either returns [ErrConcurrencyLimitReached] immediately if blocking is false
+//   - or blocks until a slot is available if blocking is true, potentially returning [ErrWaitingForSlot] if the context
+//     is canceled or times out while waiting.
+func WithConcurrencyLimit(limit int64, blocking bool) Option {
+	return optionFunc(func(b *options) {
+		b.observerForCall = newLimiter(b.observerForCall, limit, blocking)
+	})
+}
