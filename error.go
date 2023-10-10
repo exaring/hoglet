@@ -11,4 +11,8 @@ func (b Error) Error() string {
 	return "hoglet: " + b.msg
 }
 
-var ErrCircuitOpen = Error{msg: "breaker is open"}
+var (
+	ErrCircuitOpen             = Error{msg: "breaker is open"}
+	ErrConcurrencyLimitReached = Error{msg: "concurrency limit reached"}
+	ErrWaitingForSlot          = Error{msg: "waiting for slot"}
+)
