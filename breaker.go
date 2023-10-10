@@ -19,7 +19,7 @@ type observer interface {
 	observe(failure bool)
 }
 
-// newObservableCall creates a new [Observable] that ensure it can only be observed a single time.
+// newObservableCall creates a new [Observable] that ensures it can only be observed a single time.
 func newObservableCall(f func(bool)) observer {
 	o := sync.Once{}
 	return observableCall(func(failure bool) {
