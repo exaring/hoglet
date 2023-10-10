@@ -3,6 +3,7 @@ package hoglet
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,8 +13,7 @@ import (
 //
 // A zero Circuit will panic, analogous to calling a nil function variable. Initialize with [NewCircuit].
 type Circuit[IN, OUT any] struct {
-	f       BreakableFunc[IN, OUT]
-	breaker Breaker
+	f BreakableFunc[IN, OUT]
 	options
 
 	// State
@@ -29,6 +29,10 @@ type options struct {
 	// halfOpenDelay is the duration the circuit will stay open before switching to the half-open state, where a
 	// limited (~1) amount of calls are allowed that - if successful - may re-close the breaker.
 	halfOpenDelay time.Duration
+
+	// observerForCall is a function that returns an observer for the next call.
+	// Usually, this is implemented by the breaker, but it can be overridden for testing purposes.
+	observerForCall observerFactory
 }
 
 // Breaker is the interface implemented by the different breakers, responsible for actually opening the circuit.
@@ -41,24 +45,37 @@ type Breaker interface {
 	// It is called exactly once per call to [Breaker.Do], before calling the wrapped function.
 	// If the breaker is open, it returns nil.
 	// If the breaker is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
-	observerForCall() observer
+	observerForCall(context.Context) (observer, error)
 }
+
+type observerFactory func(context.Context) (observer, error)
 
 // BreakableFunc is the type of the function wrapped by a Breaker.
 type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
+
+// dedupObservableCall wraps an [observer] ensuring it can only be observed a single time.
+func dedupObservableCall(obs observer) observer {
+	o := sync.Once{}
+	return observableCall(func(failure bool) {
+		o.Do(func() {
+			obs.observe(failure)
+		})
+	})
+}
 
 // NewCircuit instantiates a new [Circuit] that wraps the provided function. See [Circuit.Call] for calling semantics.
 // A Circuit with a nil breaker is a noop wrapper around the provided function and will never open.
 func NewCircuit[IN, OUT any](f BreakableFunc[IN, OUT], breaker Breaker, opts ...Option) *Circuit[IN, OUT] {
 	b := &Circuit[IN, OUT]{
-		f:       f,
-		breaker: breaker,
+		f: f,
 		options: options{
-			isFailure: defaultFailureCondition,
+			isFailure:       defaultFailureCondition,
+			observerForCall: defaultObserver,
 		},
 	}
 
 	if breaker != nil {
+		b.observerForCall = breaker.observerForCall
 		breaker.connect(b)
 	}
 
@@ -118,7 +135,7 @@ func (c *Circuit[IN, OUT]) setOpenedAt(i int64) {
 // Call calls the wrapped function if the circuit is closed and returns its result. If the circuit is open, it returns
 // [ErrCircuitOpen].
 //
-// The wrapped function is called synchronously, but possilble context errors are recorded as soon as they occur. This
+// The wrapped function is called synchronously, but possible context errors are recorded as soon as they occur. This
 // ensures the circuit opens quickly, even if the wrapped function blocks.
 //
 // By default, all errors are considered failures (including [context.Canceled]), but this can be customized via
@@ -126,10 +143,22 @@ func (c *Circuit[IN, OUT]) setOpenedAt(i int64) {
 //
 // Panics are observed as failures, but are not recovered (i.e.: they are "repanicked" instead).
 func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error) {
-	obs := c.observerForCall()
-	if obs == nil {
-		return out, ErrCircuitOpen
+	if c.f == nil {
+		return out, nil
 	}
+
+	obs, err := c.observerForCall(ctx)
+	if err != nil {
+		// Note: errors here are not "observed" and do not count towards the breaker's failure rate.
+		// This includes:
+		// - ErrCircuitOpen (so no "feedback loops")
+		// - ErrConcurrencyLimit (for blocking limited circuits)
+		// - context timeouts while blocked on concurrency limit
+		return out, err
+	}
+
+	// ensure we dedup the final - potentially wrapped - observer.
+	obs = dedupObservableCall(obs)
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(internalCancellation)
@@ -147,14 +176,6 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 	}()
 
 	return c.f(ctx, in)
-}
-
-// observerForCall is a thin wrapper around the breaker to simplify the case where no breaker has been set.
-func (c *Circuit[IN, OUT]) observerForCall() observer {
-	if c.breaker == nil {
-		return noopObserveable{}
-	}
-	return c.breaker.observerForCall()
 }
 
 // internalCancellation is used to distinguish between internal and external (to the lib) context cancellations.
@@ -200,9 +221,14 @@ func (s State) String() string {
 }
 
 // defaultFailureCondition is the default failure condition used by [NewCircuit].
-// It consider any non-nil error a failure.
+// It considers any non-nil error a failure.
 func defaultFailureCondition(err error) bool {
 	return err != nil
+}
+
+// defaultObserver is the default observer used by [NewCircuit].
+func defaultObserver(context.Context) (observer, error) {
+	return noopObserveable{}, nil
 }
 
 type noopObserveable struct{}
