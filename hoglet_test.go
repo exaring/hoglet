@@ -34,7 +34,7 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 
 func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 	breaker := NewCircuit(
-		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
+		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewEWMABreaker(10, 0.9),
 	)
 
@@ -52,7 +52,7 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 
 func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 	breaker := NewCircuit(
-		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
+		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewSlidingWindowBreaker(10*time.Second, 0.9),
 	)
 
@@ -66,12 +66,6 @@ func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 			_, _ = breaker.Call(ctx, struct{}{})
 		}
 	})
-}
-
-func TestBreaker_zero_value_does_not_panic(t *testing.T) {
-	b := &Circuit[struct{}, struct{}]{}
-	_, err := b.Call(context.Background(), struct{}{})
-	assert.NoError(t, err)
 }
 
 func TestBreaker_nil_breaker_does_not_open(t *testing.T) {

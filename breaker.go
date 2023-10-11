@@ -64,7 +64,7 @@ type EWMABreaker struct {
 // higher sample counts to avoid opening up on small hiccups.
 //
 // The failureThreshold is the failure rate above which the breaker should open (0.0-1.0).
-func NewEWMABreaker(sampleCount int, failureThreshold float64) *EWMABreaker {
+func NewEWMABreaker(sampleCount uint, failureThreshold float64) *EWMABreaker {
 	e := &EWMABreaker{
 		// https://en.wikipedia.org/wiki/Exponential_smoothing
 		decay:     2 / (float64(sampleCount)/2 + 1),
