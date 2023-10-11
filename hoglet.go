@@ -10,7 +10,7 @@ import (
 // Circuit wraps a function and behaves like a simple circuit and breaker: it opens when the wrapped function fails and
 // stops calling the wrapped function until it closes again, returning [ErrCircuitOpen] in the meantime.
 //
-// A zero circuit will not panic, but wraps a noop. Use [NewCircuit] instead.
+// A zero Circuit will panic, analogous to calling a nil function variable. Initialize with [NewCircuit].
 type Circuit[IN, OUT any] struct {
 	f       BreakableFunc[IN, OUT]
 	breaker Breaker
@@ -47,8 +47,8 @@ type Breaker interface {
 // BreakableFunc is the type of the function wrapped by a Breaker.
 type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
 
-// NewCircuit instantiates a new circuit breaker that wraps the given function. See [Circuit.Call] for calling semantics.
-// A Circuit with a nil breaker will never open.
+// NewCircuit instantiates a new [Circuit] that wraps the provided function. See [Circuit.Call] for calling semantics.
+// A Circuit with a nil breaker is a noop wrapper around the provided function and will never open.
 func NewCircuit[IN, OUT any](f BreakableFunc[IN, OUT], breaker Breaker, opts ...Option) *Circuit[IN, OUT] {
 	b := &Circuit[IN, OUT]{
 		f:       f,
@@ -126,10 +126,6 @@ func (c *Circuit[IN, OUT]) setOpenedAt(i int64) {
 //
 // Panics are observed as failures, but are not recovered (i.e.: they are "repanicked" instead).
 func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error) {
-	if c.f == nil {
-		return out, nil
-	}
-
 	obs := c.observerForCall()
 	if obs == nil {
 		return out, ErrCircuitOpen
