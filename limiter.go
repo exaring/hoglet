@@ -30,10 +30,9 @@ func newLimiter(origFactory observerFactory, limit int64, block bool) observerFa
 		}
 	}
 	return func(ctx context.Context) (observer, error) {
-		if sem.TryAcquire(1) {
-			return wrappedFactory(ctx)
-		} else {
+		if !sem.TryAcquire(1) {
 			return nil, ErrConcurrencyLimitReached
 		}
+		return wrappedFactory(ctx)
 	}
 }
