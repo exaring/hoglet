@@ -99,7 +99,7 @@ type mockObservable struct {
 	once    sync.Once
 }
 
-// observe implements [Observer]
+// observe implements [observer]
 func (mo *mockObservable) observe(failure bool) {
 	mo.once.Do(func() {
 		if mo.breaker != nil {
