@@ -30,10 +30,13 @@ type options struct {
 	// limited (~1) amount of calls are allowed that - if successful - may re-close the breaker.
 	halfOpenDelay time.Duration
 
-	// observerForCall is a function that returns an observer for the next call.
 	// Usually, this is implemented by the breaker, but it can be overridden for testing purposes.
 	observerForCall observerFactory
 }
+
+// observerFactory is a function that returns one observer for each call going through the circuit.
+// It is used analogously to a http.Handler, allowing different plugins to "wrap" each execution.
+type observerFactory func(context.Context) (observer, error)
 
 // Breaker is the interface implemented by the different breakers, responsible for actually opening the circuit.
 // Each implementation behaves differently when deciding whether to open the breaker upon failure.
@@ -47,8 +50,6 @@ type Breaker interface {
 	// If the breaker is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
 	observerForCall(context.Context) (observer, error)
 }
-
-type observerFactory func(context.Context) (observer, error)
 
 // BreakableFunc is the type of the function wrapped by a Breaker.
 type BreakableFunc[IN, OUT any] func(context.Context, IN) (OUT, error)

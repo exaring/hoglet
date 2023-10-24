@@ -7,12 +7,13 @@ import (
 	"time"
 )
 
-// untypedCircuit is used to avoid type annotations when implementing a breaker.
+// untypedCircuit is used to avoid type annotations when implementing breakers.
 type untypedCircuit interface {
 	stateForCall() State
 	setOpenedAt(int64)
 }
 
+// observer is used to observe the result of a single wrapped call through the circuit breaker.
 type observer interface {
 	// observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observable], it will be
 	// called exactly once.

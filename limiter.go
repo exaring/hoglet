@@ -16,8 +16,8 @@ func newLimiter(origFactory observerFactory, limit int64, block bool) observerFa
 			return nil, err
 		}
 		return observableCall(func(b bool) {
+			defer sem.Release(1)
 			o.observe(b)
-			sem.Release(1)
 		}), nil
 	}
 
