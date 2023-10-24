@@ -45,9 +45,9 @@ type Breaker interface {
 	connect(untypedCircuit)
 
 	// observerForCall returns an observer for the incoming call.
-	// It is called exactly once per call to [Breaker.Do], before calling the wrapped function.
+	// It is called exactly once per call to [Circuit.Call], before calling the wrapped function.
 	// If the breaker is open, it returns nil.
-	// If the breaker is closed, it returns a non-nil [Observable] that will be used to observe the result of the call.
+	// If the breaker is closed, it returns a non-nil [observer] that will be used to observe the result of the call.
 	observerForCall(context.Context) (observer, error)
 }
 
@@ -183,7 +183,7 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 var internalCancellation = errors.New("internal cancellation")
 
 // observeCtx observes the given context for cancellation and records it as a failure.
-// It assumes [Observable.Observe] is idempotent and deduplicates calls itself.
+// It assumes [observer] is idempotent and deduplicates calls itself.
 func (c *Circuit[IN, OUT]) observeCtx(obs observer, ctx context.Context) {
 	// We want to observe a context error as soon as possible to open the breaker, but at the same time we want to
 	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
