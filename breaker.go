@@ -15,7 +15,7 @@ type untypedCircuit interface {
 
 // observer is used to observe the result of a single wrapped call through the circuit breaker.
 type observer interface {
-	// observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observable], it will be
+	// observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [observer], it will be
 	// called exactly once.
 	observe(failure bool)
 }
