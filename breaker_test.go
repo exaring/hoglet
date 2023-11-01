@@ -1,30 +1,23 @@
 package hoglet
 
 import (
-	"context"
 	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestEWMABreaker_zero_value_does_not_open(t *testing.T) {
 	b := &EWMABreaker{}
-	b.connect(&mockCircuit{})
-	o, err := b.observerForCall(context.TODO())
-	require.NoError(t, err)
-	o.observe(true)
-	_, err = b.observerForCall(context.TODO())
-	assert.NoError(t, err)
+	s := b.observe(false, true)
+	assert.NotEqual(t, stateChangeOpen, s)
 }
 
 func TestEWMABreaker_zero_value_does_not_panic(t *testing.T) {
 	b := &EWMABreaker{}
-	b.connect(&mockCircuit{})
 	assert.NotPanics(t, func() {
-		b.observerForCall(context.TODO()) // nolint: errcheck // we are just interested in the panic
+		b.observe(false, true) // nolint: errcheck // we are just interested in the panic
 	})
 }
 
@@ -39,10 +32,10 @@ func TestBreaker_Observe_State(t *testing.T) {
 		waitForHalfOpen bool // whether to put circuit in half-open BEFORE observing the call's result
 	}
 	tests := []struct {
-		name     string
-		breakers map[string]Breaker
-		stages   []stages
-		wantCall bool
+		name      string
+		breakers  map[string]Breaker
+		stages    []stages
+		wantState stateChange
 	}{
 		{
 			name: "start closed",
@@ -50,7 +43,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"ewma":          NewEWMABreaker(10, 0.3),
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.3),
 			},
-			wantCall: true,
+			wantState: stateChangeNone,
 		},
 		{
 			name: "always success",
@@ -61,7 +54,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysSuccessful},
 			},
-			wantCall: true,
+			wantState: stateChangeClose,
 		},
 		{
 			name: "always failure",
@@ -72,7 +65,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 		{
 			name: "start open; finish closed",
@@ -84,7 +77,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 100, failureFunc: alwaysSuccessful},
 			},
-			wantCall: true,
+			wantState: stateChangeClose,
 		},
 		{
 			name: "start closed; finish open",
@@ -96,7 +89,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 100, failureFunc: alwaysSuccessful},
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 		{
 			name: "just above threshold opens",
@@ -107,7 +100,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 100, failureFunc: alwaysSuccessful},
 				{calls: 101, failureFunc: alwaysFailure},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 		{
 			name: "just below threshold stays closed",
@@ -118,7 +111,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 101, failureFunc: alwaysSuccessful},
 				{calls: 100, failureFunc: alwaysFailure},
 			},
-			wantCall: true,
+			wantState: stateChangeClose,
 		},
 		{
 			name: "constant low failure rate stays mostly closed (EWMA flaky)",
@@ -129,7 +122,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }},
 			},
-			wantCall: true,
+			wantState: stateChangeClose,
 		},
 		{
 			name: "constant high failure rate stays mostly open (EWMA flaky)",
@@ -140,7 +133,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 			stages: []stages{
 				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 		{
 			name: "single success at half-open enough to close",
@@ -152,7 +145,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true},
 			},
-			wantCall: true,
+			wantState: stateChangeClose,
 		},
 		{
 			name: "single failure at half-open keeps open",
@@ -164,7 +157,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 100, failureFunc: alwaysFailure},
 				{calls: 1, failureFunc: alwaysFailure, waitForHalfOpen: true},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 		{
 			// we want to re-open fast if we closed on a fluke (to avoid thundering herd agains a service that might be
@@ -179,73 +172,40 @@ func TestBreaker_Observe_State(t *testing.T) {
 				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true},
 				{calls: 1, failureFunc: alwaysFailure},
 			},
-			wantCall: false,
+			wantState: stateChangeOpen,
 		},
 	}
 	for _, tt := range tests {
 		tt := tt
 		for bName, b := range tt.breakers {
 			b := b
-			c := &mockCircuit{}
-			b.connect(c)
 			t.Run(bName+": "+tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				for _, s := range tt.stages {
-					for i := 0; i < s.calls; i++ {
-						if s.waitForHalfOpen {
-							c.setState(StateHalfOpen)
-						}
-						failure := s.failureFunc(i)
-						o, _ := b.observerForCall(context.TODO()) // nolint: errcheck // always observe
+				var lastStateChange stateChange
 
+				for _, s := range tt.stages {
+					for i := 1; i <= s.calls; i++ {
+						failure := s.failureFunc(i)
 						switch b := b.(type) {
 						case *EWMABreaker:
-							if o != nil {
-								o.observe(failure)
-							} else {
-								b.observe(s.waitForHalfOpen, failure)
-							}
+							lastStateChange = ignoreNone(lastStateChange, b.observe(s.waitForHalfOpen && i == s.calls, failure))
 							// t.Logf("%s: sample %d: failure %v: failureRate %f => %v", tt.name, i, failure, b.failureRate.Load(), b.circuit.State())
 						case *SlidingWindowBreaker:
-							if o != nil {
-								o.observe(failure)
-							} else {
-								b.observe(s.waitForHalfOpen, failure)
-							}
+							lastStateChange = ignoreNone(lastStateChange, b.observe(s.waitForHalfOpen && i == s.calls, failure))
 							// t.Logf("%s: sample %d: failure %v: => %v", tt.name, i, failure, b.circuit.State())
 						}
 					}
 				}
-				_, err := b.observerForCall(context.TODO())
-				if tt.wantCall {
-					assert.NoError(t, err)
-				} else {
-					assert.ErrorIs(t, err, ErrCircuitOpen)
-				}
+				assert.Equal(t, tt.wantState, lastStateChange)
 			})
 		}
 	}
 }
 
-type mockCircuit struct {
-	state    State
-	openedAt int64
-}
-
-func (m *mockCircuit) stateForCall() State {
-	return m.state
-}
-
-func (m *mockCircuit) setOpenedAt(t int64) {
-	if t != 0 {
-		m.state = StateOpen
-	} else {
-		m.state = StateClosed
+func ignoreNone(old, new stateChange) stateChange {
+	if new == stateChangeNone {
+		return old
 	}
-	m.openedAt = t
-}
-
-func (m *mockCircuit) setState(s State) {
-	m.state = s
+	return new
 }

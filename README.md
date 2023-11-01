@@ -4,12 +4,12 @@
 
 # hoglet
 
-Simple low-overhead circuit breaker library.
+Simple low-overhead, circuit breaker library.
 
 ## Usage
 
 ```go
-h := hoglet.NewCircuit(
+h, _ := hoglet.NewCircuit(
     func(ctx context.Context, bar int) (Foo, error) {
         if bar == 42 {
             return Foo{Bar: bar}, nil

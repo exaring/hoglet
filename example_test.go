@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/exaring/hoglet"
 )
@@ -20,11 +21,15 @@ func foo(ctx context.Context, bar int) (Foo, error) {
 }
 
 func ExampleEWMABreaker() {
-	h := hoglet.NewCircuit(
+	h, err := hoglet.NewCircuit(
 		foo,
 		hoglet.NewEWMABreaker(10, 0.1),
-		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
+		hoglet.WithHalfOpenDelay(time.Second),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	f, err := h.Call(context.Background(), 42)
 	if err != nil {
 		log.Fatal(err)
@@ -44,11 +49,14 @@ func ExampleEWMABreaker() {
 }
 
 func ExampleSlidingWindowBreaker() {
-	h := hoglet.NewCircuit(
+	h, err := hoglet.NewCircuit(
 		foo,
 		hoglet.NewSlidingWindowBreaker(10, 0.1),
-		hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	f, err := h.Call(context.Background(), 42)
 	if err != nil {
 		log.Fatal(err)
@@ -65,4 +73,49 @@ func ExampleSlidingWindowBreaker() {
 	// 42
 	// bar is not 42
 	// hoglet: breaker is open
+}
+
+func ExampleConcurrencyLimiter() {
+	h, err := hoglet.NewCircuit(
+		func(ctx context.Context, _ any) (any, error) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+			return nil, nil
+		},
+		hoglet.NewSlidingWindowBreaker(10, 0.1),
+		hoglet.WithBreakerMiddleware(hoglet.ConcurrencyLimiter(1, false)),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	errCh := make(chan error)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		// use up the concurrency limit
+		_, _ = h.Call(ctx, 42)
+	}()
+
+	// ensure call above actually started
+	time.Sleep(time.Millisecond * 100)
+
+	go func() {
+		defer close(errCh)
+		_, err := h.Call(ctx, 42)
+		if err != nil {
+			errCh <- err
+		}
+	}()
+
+	for err := range errCh {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// hoglet: concurrency limit reached
 }

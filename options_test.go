@@ -18,9 +18,10 @@ func TestWithHalfOpenDelay(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			halfOpenDelay := 500 * time.Millisecond
 			sentinelErr := errors.New("foo")
-			cb := NewCircuit(func(_ context.Context, in error) (any, error) { return nil, in }, b, WithHalfOpenDelay(halfOpenDelay))
+			cb, err := NewCircuit(func(_ context.Context, in error) (any, error) { return nil, in }, b, WithHalfOpenDelay(halfOpenDelay))
+			require.NoError(t, err)
 
-			_, err := cb.Call(context.Background(), sentinelErr)
+			_, err = cb.Call(context.Background(), sentinelErr)
 			require.ErrorIs(t, err, sentinelErr)
 
 			_, err = cb.Call(context.Background(), nil)

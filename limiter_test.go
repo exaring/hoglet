@@ -1,4 +1,4 @@
-package hoglet
+package hoglet_test
 
 import (
 	"context"
@@ -6,26 +6,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/exaring/hoglet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type mockPanickingObservable struct{}
 
-func (mo *mockPanickingObservable) observe(shouldPanic bool) {
+func (mo mockPanickingObservable) Observe(shouldPanic bool) {
 	// abuse the observer interface to signal a panic
 	if shouldPanic {
 		panic("mockObservable meant to panic")
 	}
 }
 
-func Test_newLimiter(t *testing.T) {
-	orig := func() observerFactory {
-		return func(context.Context) (observer, error) {
-			return &mockPanickingObservable{}, nil
-		}
-	}
+type mockObserverFactory struct{}
 
+func (mof mockObserverFactory) ObserverForCall(ctx context.Context, state hoglet.State) (hoglet.Observer, error) {
+	return &mockPanickingObservable{}, nil
+}
+
+func Test_ConcurrencyLimiter(t *testing.T) {
 	type args struct {
 		limit int64
 		block bool
@@ -48,14 +49,14 @@ func Test_newLimiter(t *testing.T) {
 			name:    "over limit; non-blocking",
 			args:    args{limit: 1, block: false},
 			calls:   1,
-			wantErr: ErrConcurrencyLimitReached,
+			wantErr: hoglet.ErrConcurrencyLimitReached,
 		},
 		{
 			name:    "on limit; blocking",
 			args:    args{limit: 1, block: true},
 			calls:   1,
 			cancel:  true, // cancel simulates a timeout in this case
-			wantErr: ErrWaitingForSlot,
+			wantErr: hoglet.ErrWaitingForSlot,
 		},
 		{
 			name:    "cancelation releases with error",
@@ -82,19 +83,21 @@ func Test_newLimiter(t *testing.T) {
 			wgStop := &sync.WaitGroup{}
 			defer wgStop.Wait()
 
-			of := newLimiter(orig(), tt.args.limit, tt.args.block)
+			cl := hoglet.ConcurrencyLimiter(tt.args.limit, tt.args.block)
+			of, err := cl(mockObserverFactory{})
+			require.NoError(t, err)
 			for i := 0; i < tt.calls; i++ {
 				wantPanic := tt.wantPanicOn != nil && *tt.wantPanicOn == i
 
 				f := func() {
 					defer wgStop.Done()
-					o, err := of(ctxCalls)
+					o, err := of.ObserverForCall(ctxCalls, hoglet.StateClosed)
 					wgStart.Done()
 					require.NoError(t, err)
 
 					<-ctxCalls.Done()
 
-					o.observe(wantPanic)
+					o.Observe(wantPanic)
 				}
 
 				wgStart.Add(1)
@@ -116,7 +119,7 @@ func Test_newLimiter(t *testing.T) {
 
 			wgStart.Wait() // ensure all calls are started
 
-			o, err := of(ctx)
+			o, err := of.ObserverForCall(ctx, hoglet.StateClosed)
 			assert.ErrorIs(t, err, tt.wantErr)
 			if tt.wantErr == nil {
 				assert.NotNil(t, o)
