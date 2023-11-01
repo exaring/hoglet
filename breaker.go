@@ -1,30 +1,35 @@
 package hoglet
 
 import (
-	"context"
 	"math"
 	"sync/atomic"
 	"time"
 )
 
-// untypedCircuit is used to avoid type annotations when implementing breakers.
-type untypedCircuit interface {
-	stateForCall() State
-	setOpenedAt(int64)
-}
+// stateChange encodes what the circuit should do after observing a call.
+type stateChange int
 
-// observer is used to observe the result of a single wrapped call through the circuit breaker.
-type observer interface {
-	// observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [observer], it will be
+const (
+	// stateChangeNone means the circuit should keep its current state.
+	stateChangeNone stateChange = iota
+	// stateChangeOpen means the circuit should open.
+	stateChangeOpen
+	// stateChangeClose means the circuit should close.
+	stateChangeClose
+)
+
+// Observer is used to observe the result of a single wrapped call through the circuit breaker.
+// Calls in an open circuit cause no observer to be created.
+type Observer interface {
+	// Observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observer], it will be
 	// called exactly once.
-	observe(failure bool)
+	Observe(failure bool)
 }
 
-// observableCall tracks a single call through the breaker.
-// It should be instantiated via [newObservableCall] to ensure the observer is only called once.
-type observableCall func(bool)
+// ObserverFunc is a helper to turn any function into an [Observer].
+type ObserverFunc func(bool)
 
-func (o observableCall) observe(failure bool) {
+func (o ObserverFunc) Observe(failure bool) {
 	o(failure)
 }
 
@@ -34,7 +39,6 @@ func (o observableCall) observe(failure bool) {
 type EWMABreaker struct {
 	decay     float64
 	threshold float64
-	circuit   untypedCircuit
 
 	// State
 	failureRate atomic.Value
@@ -67,31 +71,14 @@ func NewEWMABreaker(sampleCount uint, failureThreshold float64) *EWMABreaker {
 	return e
 }
 
-func (e *EWMABreaker) connect(c untypedCircuit) {
-	e.circuit = c
-}
-
-func (e *EWMABreaker) observerForCall(_ context.Context) (observer, error) {
-	state := e.circuit.stateForCall()
-
-	if state == StateOpen {
-		return nil, ErrCircuitOpen
-	}
-
-	return observableCall(func(failure bool) {
-		e.observe(state == StateHalfOpen, failure)
-	}), nil
-}
-
-func (e *EWMABreaker) observe(halfOpen, failure bool) {
+func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 	if e.threshold == 0 {
-		return
+		return stateChangeNone
 	}
 
 	if !failure && halfOpen {
-		e.circuit.setOpenedAt(0)
 		e.failureRate.Store(e.threshold)
-		return
+		return stateChangeClose
 	}
 
 	var value float64 = 0.0
@@ -101,7 +88,7 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) {
 
 	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
 	failureRate, _ := e.failureRate.Swap(value).(float64)
-	if failureRate == 0 {
+	if failureRate == math.SmallestNonzeroFloat64 {
 		failureRate = value
 	} else {
 		failureRate = (value * e.decay) + (failureRate * (1 - e.decay))
@@ -109,9 +96,9 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) {
 	}
 
 	if failureRate > e.threshold {
-		e.circuit.setOpenedAt(time.Now().UnixMicro())
+		return stateChangeOpen
 	} else {
-		e.circuit.setOpenedAt(0)
+		return stateChangeClose
 	}
 }
 
@@ -119,7 +106,6 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) {
 type SlidingWindowBreaker struct {
 	windowSize time.Duration
 	threshold  float64
-	circuit    untypedCircuit
 
 	// State
 
@@ -151,23 +137,7 @@ func NewSlidingWindowBreaker(windowSize time.Duration, failureThreshold float64)
 	return s
 }
 
-func (s *SlidingWindowBreaker) connect(c untypedCircuit) {
-	s.circuit = c
-}
-
-func (s *SlidingWindowBreaker) observerForCall(_ context.Context) (observer, error) {
-	state := s.circuit.stateForCall()
-
-	if state == StateOpen {
-		return nil, ErrCircuitOpen
-	}
-
-	return observableCall(func(failure bool) {
-		s.observe(state == StateHalfOpen, failure)
-	}), nil
-}
-
-func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
+func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	var (
 		lastFailureCount    int64
 		lastSuccessCount    int64
@@ -176,8 +146,7 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
 	)
 
 	if !failure && halfOpen {
-		s.circuit.setOpenedAt(0)
-		return
+		return stateChangeClose
 	}
 
 	// The second condition ensures only one goroutine can swap the windows. Necessary since multiple swaps would
@@ -185,7 +154,6 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
 	if currentStartMicros := s.currentStart.Load(); sinceMicros(currentStartMicros) > s.windowSize && s.currentStart.CompareAndSwap(currentStartMicros, time.Now().UnixMicro()) {
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
-		s.circuit.setOpenedAt(0)
 	} else {
 		lastFailureCount = s.lastFailureCount.Load()
 		lastSuccessCount = s.lastSuccessCount.Load()
@@ -208,9 +176,9 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) {
 	failureRate := weightedFailures / weightedTotal
 
 	if failureRate > s.threshold {
-		s.circuit.setOpenedAt(time.Now().UnixMicro())
+		return stateChangeOpen
 	} else {
-		s.circuit.setOpenedAt(0)
+		return stateChangeClose
 	}
 }
 

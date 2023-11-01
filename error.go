@@ -12,7 +12,12 @@ func (b Error) Error() string {
 }
 
 var (
-	ErrCircuitOpen             = Error{msg: "breaker is open"}
+	// ErrCircuitOpen is returned when a circuit is open and not allowing calls through.
+	ErrCircuitOpen = Error{msg: "breaker is open"}
+	// ErrConcurrencyLimitReached is returned by a [Circuit] using [WithConcurrencyLimit] in non-blocking mode when the
+	// set limit is reached.
 	ErrConcurrencyLimitReached = Error{msg: "concurrency limit reached"}
-	ErrWaitingForSlot          = Error{msg: "waiting for slot"}
+	// ErrWaitingForSlot is returned by a [Circuit] using [WithConcurrencyLimit] in blocking mode when a context error
+	// occurs while waiting for a slot.
+	ErrWaitingForSlot = Error{msg: "waiting for slot"}
 )
