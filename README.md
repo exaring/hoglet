@@ -4,7 +4,7 @@
 
 # hoglet
 
-Simple low-overhead, circuit breaker library.
+Simple low-overhead circuit breaker library.
 
 ## Usage
 
