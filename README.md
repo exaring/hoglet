@@ -9,7 +9,7 @@ Simple low-overhead circuit breaker library.
 ## Usage
 
 ```go
-h, _ := hoglet.NewCircuit(
+h, err := hoglet.NewCircuit(
     func(ctx context.Context, bar int) (Foo, error) {
         if bar == 42 {
             return Foo{Bar: bar}, nil
@@ -19,6 +19,8 @@ h, _ := hoglet.NewCircuit(
     hoglet.NewSlidingWindowBreaker(10, 0.1),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCancelation),
 )
+/* if err != nil ... */
+
 f, _ := h.Call(context.Background(), 42)
 fmt.Println(f.Bar) // 42
 

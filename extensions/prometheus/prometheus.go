@@ -15,10 +15,10 @@ const (
 	namespace = "hoglet"
 )
 
-// WithPrometheusMetrics returns a [hoglet.BreakerMiddleware] that registers prometheus metrics for the circuit breaker.
+// WithPrometheusMetrics returns a [hoglet.BreakerMiddleware] that registers prometheus metrics for the circuit.
 //
 // ⚠️ Note: the provided name must be unique across all hoglet instances using the same registerer.
-func WithPrometheusMetrics(name string, reg prometheus.Registerer) hoglet.BreakerMiddleware {
+func WithPrometheusMetrics(circuitName string, reg prometheus.Registerer) hoglet.BreakerMiddleware {
 	return func(next hoglet.ObserverFactory) (hoglet.ObserverFactory, error) {
 		callDurations := prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -27,10 +27,10 @@ func WithPrometheusMetrics(name string, reg prometheus.Registerer) hoglet.Breake
 				Name:      "call_durations_seconds",
 				Help:      "Call durations in seconds",
 				ConstLabels: prometheus.Labels{
-					"circuit": name,
+					"circuit": circuitName,
 				},
 			},
-			[]string{"error"},
+			[]string{"success"},
 		)
 
 		droppedCalls := prometheus.NewCounterVec(
@@ -40,7 +40,7 @@ func WithPrometheusMetrics(name string, reg prometheus.Registerer) hoglet.Breake
 				Name:      "dropped_calls_total",
 				Help:      "Total number of calls with an open circuit (i.e.: calls that did not reach the wrapped function)",
 				ConstLabels: prometheus.Labels{
-					"circuit": name,
+					"circuit": circuitName,
 				},
 			},
 			[]string{"cause"},
@@ -53,7 +53,7 @@ func WithPrometheusMetrics(name string, reg prometheus.Registerer) hoglet.Breake
 				Name:      "inflight_calls_current",
 				Help:      "Current number of calls in-flight",
 				ConstLabels: prometheus.Labels{
-					"circuit": name,
+					"circuit": circuitName,
 				},
 			},
 		)
@@ -99,7 +99,8 @@ func (pos *prometheusObserverFactory) ObserverForCall(ctx context.Context, state
 	start := pos.timesource.Now()
 	pos.inflightCalls.Inc()
 	return hoglet.ObserverFunc(func(b bool) {
-		pos.callDurations.WithLabelValues(strconv.FormatBool(b)).Observe(pos.timesource.Since(start).Seconds())
+		// invert failure → success to make the metric more intuitive
+		pos.callDurations.WithLabelValues(strconv.FormatBool(!b)).Observe(pos.timesource.Since(start).Seconds())
 		pos.inflightCalls.Dec()
 		o.Observe(b)
 	}), nil
