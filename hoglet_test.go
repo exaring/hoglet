@@ -82,9 +82,10 @@ func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
 }
 
 func TestBreaker_ctx_parameter_not_cancelled(t *testing.T) {
-	b := NewCircuit(func(ctx context.Context, _ any) (context.Context, error) {
+	b, err := NewCircuit(func(ctx context.Context, _ any) (context.Context, error) {
 		return ctx, nil
 	}, nil)
+	require.NoError(t, err)
 	ctx, err := b.Call(context.Background(), noopInSuccess)
 
 	require.NoError(t, err)
