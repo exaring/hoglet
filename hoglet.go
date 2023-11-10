@@ -161,11 +161,11 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 	// ensure we dedup the final - potentially wrapped - observer.
 	obs = dedupObservableCall(obs)
 
-	ctx, cancel := context.WithCancelCause(ctx)
+	obsCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(internalCancellation)
 
 	// TODO: we could skip this if we could ensure the original context has neither cancellation nor deadline
-	go c.observeCtx(obs, ctx)
+	go c.observeCtx(obs, obsCtx)
 
 	defer func() {
 		// ensure we also open the breaker on panics
