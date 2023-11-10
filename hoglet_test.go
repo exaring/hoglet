@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var sentinel = errors.New("sentinel error")
@@ -74,6 +75,16 @@ func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
 	assert.Equal(t, sentinel, err)
 	_, err = b.Call(context.Background(), noopInFailure)
 	assert.Equal(t, sentinel, err)
+}
+
+func TestBreaker_ctx_parameter_not_cancelled(t *testing.T) {
+	b := NewCircuit(func(ctx context.Context, _ any) (context.Context, error) {
+		return ctx, nil
+	}, nil)
+	ctx, err := b.Call(context.Background(), noopInSuccess)
+
+	require.NoError(t, err)
+	assert.NoError(t, ctx.Err())
 }
 
 // mockBreaker is a mock implementation of the [Breaker] interface that opens or closes depending on the last observed
