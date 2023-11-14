@@ -92,6 +92,23 @@ func TestBreaker_ctx_parameter_not_cancelled(t *testing.T) {
 	assert.NoError(t, ctx.Err())
 }
 
+func TestCircuit_ignored_context_cancellation_still_returned(t *testing.T) {
+	b, err := NewCircuit(
+		func(ctx context.Context, _ any) (string, error) {
+			return "expected", ctx.Err()
+		},
+		nil,
+		WithFailureCondition(IgnoreContextCancelation))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := b.Call(ctx, nil)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, "expected", out)
+}
+
 // mockBreaker is a mock implementation of the [Breaker] interface that opens or closes depending on the last observed
 // failure.
 type mockBreaker struct{}

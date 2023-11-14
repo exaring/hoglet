@@ -29,6 +29,8 @@ func WithHalfOpenDelay(delay time.Duration) Option {
 // If the provided function returns true, the error is considered a failure and the breaker may open (depending on the
 // breaker logic).
 // The default filter considers all non-nil errors as failures (err != nil).
+//
+// This does not modify the error returned by [Circuit.Call]. It only affects the circuit itself.
 func WithFailureCondition(condition func(error) bool) Option {
 	return optionFunc(func(o *options) error {
 		o.isFailure = condition
