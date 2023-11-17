@@ -33,6 +33,14 @@ func (o ObserverFunc) Observe(failure bool) {
 	o(failure)
 }
 
+func fromStore(i uint64) float64 {
+	return math.Float64frombits(i)
+}
+
+func toStore(i float64) uint64 {
+	return math.Float64bits(i)
+}
+
 // EWMABreaker is a [Breaker] that uses an exponentially weighted moving failure rate. See [NewEWMABreaker] for details.
 //
 // A zero EWMABreaker is ready to use, but will never open.
@@ -41,7 +49,7 @@ type EWMABreaker struct {
 	threshold float64
 
 	// State
-	failureRate atomic.Value
+	failureRate atomic.Uint64
 }
 
 // NewEWMABreaker creates a new [EWMABreaker] with the given sample count and threshold. It uses an Exponentially
@@ -66,7 +74,7 @@ func NewEWMABreaker(sampleCount uint, failureThreshold float64) *EWMABreaker {
 		threshold: failureThreshold,
 	}
 
-	e.failureRate.Store(float64(math.SmallestNonzeroFloat64)) // start closed; also work around "initial value" problem
+	e.failureRate.Store(toStore(math.SmallestNonzeroFloat64)) // start closed; also work around "initial value" problem
 
 	return e
 }
@@ -77,22 +85,22 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 	}
 
 	if !failure && halfOpen {
-		e.failureRate.Store(e.threshold)
+		e.failureRate.Store(toStore(e.threshold))
 		return stateChangeClose
 	}
 
-	var value float64 = 0.0
+	var value = 0.0
 	if failure {
 		value = 1.0
 	}
 
 	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
-	failureRate, _ := e.failureRate.Swap(value).(float64)
+	failureRate := fromStore(e.failureRate.Swap(toStore(value)))
 	if failureRate == math.SmallestNonzeroFloat64 {
 		failureRate = value
 	} else {
 		failureRate = (value * e.decay) + (failureRate * (1 - e.decay))
-		e.failureRate.Store(failureRate)
+		e.failureRate.Store(toStore(failureRate))
 	}
 
 	if failureRate > e.threshold {
