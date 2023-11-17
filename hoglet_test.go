@@ -36,7 +36,8 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 	h, err := NewCircuit(
 		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewEWMABreaker(10, 0.9),
-		WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
+		WithHalfOpenDelay(time.Second),
+		// WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
 	)
 	require.NoError(b, err)
 
@@ -56,7 +57,7 @@ func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 	h, err := NewCircuit(
 		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewSlidingWindowBreaker(10*time.Second, 0.9),
-		WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
+		// WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
 	)
 	require.NoError(b, err)
 
