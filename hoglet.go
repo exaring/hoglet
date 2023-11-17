@@ -59,11 +59,17 @@ type WrappedFunc[IN, OUT any] func(context.Context, IN) (OUT, error)
 
 // dedupObservableCall wraps an [Observer] ensuring it can only be observed a single time.
 func dedupObservableCall(obs Observer) Observer {
-	o := sync.Once{}
-	return ObserverFunc(func(failure bool) {
-		o.Do(func() {
-			obs.Observe(failure)
-		})
+	return &dedupedObserver{Observer: obs}
+}
+
+type dedupedObserver struct {
+	Observer
+	o sync.Once
+}
+
+func (d *dedupedObserver) Observe(failure bool) {
+	d.o.Do(func() {
+		d.Observer.Observe(failure)
 	})
 }
 
@@ -154,16 +160,26 @@ func (c *Circuit[IN, OUT]) setOpenedAt(i int64) {
 //
 // It implements [ObserverFactory], so that the [Circuit] can act as the base for [BreakerMiddleware].
 func (c *Circuit[IN, OUT]) ObserverForCall(_ context.Context, state State) (Observer, error) {
-	return ObserverFunc(func(failure bool) {
-		switch c.breaker.observe(state == StateHalfOpen, failure) {
-		case stateChangeNone:
-			return // noop
-		case stateChangeOpen:
-			c.setOpenedAt(time.Now().UnixMicro())
-		case stateChangeClose:
-			c.setOpenedAt(0)
-		}
-	}), nil
+	return stateObserver[IN, OUT]{
+		circuit: c,
+		state:   state,
+	}, nil
+}
+
+type stateObserver[IN, OUT any] struct {
+	circuit *Circuit[IN, OUT]
+	state   State
+}
+
+func (s stateObserver[IN, OUT]) Observe(failure bool) {
+	switch s.circuit.breaker.observe(s.state == StateHalfOpen, failure) {
+	case stateChangeNone:
+		return // noop
+	case stateChangeOpen:
+		s.circuit.setOpenedAt(time.Now().UnixMicro())
+	case stateChangeClose:
+		s.circuit.setOpenedAt(0)
+	}
 }
 
 // Call calls the wrapped function if the circuit is closed and returns its result. If the circuit is open, it returns
