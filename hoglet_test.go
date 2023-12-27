@@ -191,17 +191,22 @@ func TestHoglet_Do(t *testing.T) {
 				}
 
 				var err error
-				maybeAssertPanic := assert.NotPanics
-				if call.wantPanic != nil {
-					maybeAssertPanic = func(t assert.TestingT, f assert.PanicTestFunc, msgAndArgs ...interface{}) bool {
-						return assert.PanicsWithValue(t, call.wantPanic, f, msgAndArgs...)
-					}
-				}
 				maybeAssertPanic(t, func() {
 					_, err = h.Call(context.Background(), call.arg)
-				})
+				}, call.wantPanic)
 				assert.Equal(t, call.wantErr, err, "unexpected error on call %d: %v", i, err)
 			}
 		})
 	}
+}
+
+// maybeAssertPanic is a test-table helper to assert that a function panics or not, depending on the value of wantPanic.
+func maybeAssertPanic(t *testing.T, f func(), wantPanic any) {
+	wrapped := assert.NotPanics
+	if wantPanic != nil {
+		wrapped = func(t assert.TestingT, f assert.PanicTestFunc, msgAndArgs ...interface{}) bool {
+			return assert.PanicsWithValue(t, wantPanic, f, msgAndArgs...)
+		}
+	}
+	wrapped(t, f)
 }
