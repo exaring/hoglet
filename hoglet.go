@@ -136,21 +136,27 @@ func (c *Circuit[IN, OUT]) stateForCall() State {
 		// We reset openedAt to block further calls to pass through when half-open. A success will cause the breaker to
 		// close. This is slightly racy: multiple goroutines may reach this point concurrently since we do not lock the
 		// breaker.
-		c.setOpenedAt(time.Now().UnixMicro())
+		c.reopen()
 	}
 
 	return state
 }
 
-// setOpenedAt sets the time the circuit was opened at.
-// Passing a value of 0 closes the cirtuit.
-func (c *Circuit[IN, OUT]) setOpenedAt(i int64) {
-	if i == 0 {
-		c.openedAt.Store(0)
-	} else {
-		// CompareAndSwap is needed to avoid clobbering another goroutine's openedAt value.
-		c.openedAt.CompareAndSwap(0, i)
-	}
+// open marks the circuit as open, if it not already.
+// It is safe for concurrent calls and only the first one will actually set opening time.
+func (c *Circuit[IN, OUT]) open() {
+	// CompareAndSwap is needed to avoid clobbering another goroutine's openedAt value.
+	c.openedAt.CompareAndSwap(0, time.Now().UnixMicro())
+}
+
+// reopen forcefully (re)marks the circuit as open, resetting the half-open time.
+func (c *Circuit[IN, OUT]) reopen() {
+	c.openedAt.Store(time.Now().UnixMicro())
+}
+
+// close closes the circuit.
+func (c *Circuit[IN, OUT]) close() {
+	c.openedAt.Store(0)
 }
 
 // ObserverForCall returns an [Observer] for the incoming call.
@@ -176,9 +182,9 @@ func (s stateObserver[IN, OUT]) Observe(failure bool) {
 	case stateChangeNone:
 		return // noop
 	case stateChangeOpen:
-		s.circuit.setOpenedAt(time.Now().UnixMicro())
+		s.circuit.open()
 	case stateChangeClose:
-		s.circuit.setOpenedAt(0)
+		s.circuit.close()
 	}
 }
 
