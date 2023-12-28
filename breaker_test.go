@@ -29,13 +29,13 @@ func TestBreaker_Observe_State(t *testing.T) {
 	type stages struct {
 		calls           int
 		failureFunc     func(int) bool
-		waitForHalfOpen bool // whether to put circuit in half-open BEFORE observing the call's result
+		waitForHalfOpen bool        // whether to put circuit in half-open BEFORE observing the call's result
+		wantStateChange stateChange // expected state change at the END of the stage
 	}
 	tests := []struct {
-		name      string
-		breakers  map[string]Breaker
-		stages    []stages
-		wantState stateChange
+		name     string
+		breakers map[string]Breaker
+		stages   []stages
 	}{
 		{
 			name: "start closed",
@@ -43,7 +43,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"ewma":          NewEWMABreaker(10, 0.3),
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.3),
 			},
-			wantState: stateChangeNone,
+			stages: []stages{
+				{calls: 1, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
+			},
 		},
 		{
 			name: "always success",
@@ -52,9 +54,8 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.3),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysSuccessful},
+				{calls: 100, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
 			},
-			wantState: stateChangeClose,
 		},
 		{
 			name: "always failure",
@@ -63,9 +64,8 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.9),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysFailure},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 		{
 			name: "start open; finish closed",
@@ -74,10 +74,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				// sliding window is not affected by ordering
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysFailure},
-				{calls: 100, failureFunc: alwaysSuccessful},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
+				{calls: 100, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
 			},
-			wantState: stateChangeClose,
 		},
 		{
 			name: "start closed; finish open",
@@ -86,10 +85,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				// sliding window is not affected by ordering
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysSuccessful},
-				{calls: 100, failureFunc: alwaysFailure},
+				{calls: 100, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 		{
 			name: "just above threshold opens",
@@ -97,10 +95,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.5),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysSuccessful},
-				{calls: 101, failureFunc: alwaysFailure},
+				{calls: 100, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
+				{calls: 101, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 		{
 			name: "just below threshold stays closed",
@@ -108,10 +105,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.5),
 			},
 			stages: []stages{
-				{calls: 101, failureFunc: alwaysSuccessful},
-				{calls: 100, failureFunc: alwaysFailure},
+				{calls: 101, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeClose},
 			},
-			wantState: stateChangeClose,
 		},
 		{
 			name: "constant low failure rate stays mostly closed (EWMA flaky)",
@@ -120,9 +116,8 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }},
+				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }, wantStateChange: stateChangeClose},
 			},
-			wantState: stateChangeClose,
 		},
 		{
 			name: "constant high failure rate stays mostly open (EWMA flaky)",
@@ -131,9 +126,8 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }},
+				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 		{
 			name: "single success at half-open enough to close",
@@ -142,10 +136,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysFailure},
-				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
+				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true, wantStateChange: stateChangeClose},
 			},
-			wantState: stateChangeClose,
 		},
 		{
 			name: "single failure at half-open keeps open",
@@ -154,10 +147,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysFailure},
-				{calls: 1, failureFunc: alwaysFailure, waitForHalfOpen: true},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
+				{calls: 1, failureFunc: alwaysFailure, waitForHalfOpen: true, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 		{
 			// we want to re-open fast if we closed on a fluke (to avoid thundering herd agains a service that might be
@@ -168,11 +160,10 @@ func TestBreaker_Observe_State(t *testing.T) {
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: alwaysFailure},
-				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true},
-				{calls: 1, failureFunc: alwaysFailure},
+				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
+				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true, wantStateChange: stateChangeClose},
+				{calls: 1, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
 			},
-			wantState: stateChangeOpen,
 		},
 	}
 	for _, tt := range tests {
@@ -182,9 +173,9 @@ func TestBreaker_Observe_State(t *testing.T) {
 			t.Run(bName+": "+tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				var lastStateChange stateChange
-
 				for _, s := range tt.stages {
+					var lastStateChange stateChange
+
 					for i := 1; i <= s.calls; i++ {
 						failure := s.failureFunc(i)
 						switch b := b.(type) {
@@ -196,13 +187,15 @@ func TestBreaker_Observe_State(t *testing.T) {
 							// t.Logf("%s: sample %d: failure %v: => %v", tt.name, i, failure, b.circuit.State())
 						}
 					}
+
+					assert.Equal(t, s.wantStateChange, lastStateChange, "expected %q, got %q", s.wantStateChange, lastStateChange)
 				}
-				assert.Equal(t, tt.wantState, lastStateChange)
 			})
 		}
 	}
 }
 
+// ignoreNone is a small helper to skip the "none" state change and only record the last "effective" state change.
 func ignoreNone(old, new stateChange) stateChange {
 	if new == stateChangeNone {
 		return old

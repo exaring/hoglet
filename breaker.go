@@ -18,6 +18,19 @@ const (
 	stateChangeClose
 )
 
+func (s stateChange) String() string {
+	switch s {
+	case stateChangeNone:
+		return "none"
+	case stateChangeOpen:
+		return "open"
+	case stateChangeClose:
+		return "close"
+	default:
+		return "unknown"
+	}
+}
+
 // Observer is used to observe the result of a single wrapped call through the circuit breaker.
 // Calls in an open circuit cause no observer to be created.
 type Observer interface {
