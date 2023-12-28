@@ -96,20 +96,20 @@ func TestWithPrometheusMetrics(t *testing.T) {
 
 	durationsOut1 := `# HELP hoglet_circuit_call_durations_seconds Call durations in seconds
 	                  # TYPE hoglet_circuit_call_durations_seconds histogram
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.005"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.01"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.025"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.05"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.1"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.25"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="0.5"} 0
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="1"} 1
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="2.5"} 1
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="5"} 1
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="10"} 1
-	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",error="true",le="+Inf"} 1
-	                  hoglet_circuit_call_durations_seconds_sum{circuit="test",error="true"} 1
-	                  hoglet_circuit_call_durations_seconds_count{circuit="test",error="true"} 1
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.005"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.01"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.025"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.05"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.1"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.25"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="0.5"} 0
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="1"} 1
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="2.5"} 1
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="5"} 1
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="10"} 1
+	                  hoglet_circuit_call_durations_seconds_bucket{circuit="test",success="false",le="+Inf"} 1
+	                  hoglet_circuit_call_durations_seconds_sum{circuit="test",success="false"} 1
+	                  hoglet_circuit_call_durations_seconds_count{circuit="test",success="false"} 1
 	                  # HELP hoglet_circuit_dropped_calls_total Total number of calls with an open circuit (i.e.: calls that did not reach the wrapped function)
                       # TYPE hoglet_circuit_dropped_calls_total counter
                       hoglet_circuit_dropped_calls_total{cause="circuit_open",circuit="test"} 1
