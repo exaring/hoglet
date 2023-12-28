@@ -183,11 +183,12 @@ func TestHoglet_Do(t *testing.T) {
 			t.Parallel()
 
 			mt := &mockBreaker{}
-			h, err := NewCircuit(noop, mt)
+			h, err := NewCircuit(noop, mt, WithHalfOpenDelay(time.Minute))
 			require.NoError(t, err)
 			for i, call := range tt.calls {
 				if call.halfOpen {
-					h.setOpenedAt(int64(h.halfOpenDelay))
+					// simulate passage of time
+					h.openedAt.Store(int64(time.Now().Add(-h.halfOpenDelay).UnixMicro()))
 				}
 
 				var err error
