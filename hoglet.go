@@ -195,7 +195,7 @@ func (s stateObserver[IN, OUT]) Observe(failure bool) {
 // ensures the circuit opens quickly, even if the wrapped function blocks.
 //
 // By default, all errors are considered failures (including [context.Canceled]), but this can be customized via
-// [WithFailureCondition] and [IgnoreContextCancelation].
+// [WithFailureCondition] and [IgnoreContextCanceled].
 //
 // Panics are observed as failures, but are not recovered (i.e.: they are "repanicked" instead).
 func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error) {
@@ -224,7 +224,7 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 	obs = dedupObservableCall(obs)
 
 	obsCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(internalCancellation)
+	defer cancel(errWrappedFunctionDone)
 
 	// TODO: we could skip this if we could ensure the original context has neither cancellation nor deadline
 	go c.observeCtx(obs, obsCtx)
@@ -241,8 +241,8 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 	return c.f(ctx, in)
 }
 
-// internalCancellation is used to distinguish between internal and external (to the lib) context cancellations.
-var internalCancellation = errors.New("internal cancellation")
+// errWrappedFunctionDone is used to distinguish between internal and external (to the lib) context cancellations.
+var errWrappedFunctionDone = errors.New("wrapped function done")
 
 // observeCtx observes the given context for cancellation and records it as a failure.
 // It assumes [Observer] is idempotent and deduplicates calls itself.
@@ -252,7 +252,7 @@ func (c *Circuit[IN, OUT]) observeCtx(obs Observer, ctx context.Context) {
 	<-ctx.Done()
 
 	err := ctx.Err()
-	if context.Cause(ctx) == internalCancellation {
+	if context.Cause(ctx) == errWrappedFunctionDone {
 		err = nil // ignore internal cancellations; the wrapped function returned already
 	}
 	obs.Observe(c.options.isFailure(err))

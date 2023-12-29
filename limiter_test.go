@@ -59,7 +59,7 @@ func Test_ConcurrencyLimiter(t *testing.T) {
 			wantErr: hoglet.ErrWaitingForSlot,
 		},
 		{
-			name:    "cancelation releases with error",
+			name:    "cancellation releases with error",
 			args:    args{limit: 1, block: true},
 			calls:   1,
 			cancel:  true,

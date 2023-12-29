@@ -99,7 +99,7 @@ func TestCircuit_ignored_context_cancellation_still_returned(t *testing.T) {
 			return "expected", ctx.Err()
 		},
 		nil,
-		WithFailureCondition(IgnoreContextCancelation))
+		WithFailureCondition(IgnoreContextCanceled))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

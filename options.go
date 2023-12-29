@@ -2,6 +2,7 @@ package hoglet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -38,9 +39,9 @@ func WithFailureCondition(condition func(error) bool) Option {
 	})
 }
 
-// IgnoreContextCancelation is a helper function for [WithFailureCondition] that ignores [context.Canceled] errors.
-func IgnoreContextCancelation(err error) bool {
-	return err != nil && err != context.Canceled
+// IgnoreContextCanceled is a helper function for [WithFailureCondition] that ignores [context.Canceled] errors.
+func IgnoreContextCanceled(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled)
 }
 
 // WithMiddleware allows wrapping the [Breaker] via a [BreakerMiddleware].
