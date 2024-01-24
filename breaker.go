@@ -1,6 +1,7 @@
 package hoglet
 
 import (
+	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -123,6 +124,14 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 	}
 }
 
+// apply implements Option.
+func (e *EWMABreaker) apply(o *options) error {
+	if o.halfOpenDelay == 0 {
+		return fmt.Errorf("EWMABreaker requires a half-open delay")
+	}
+	return nil
+}
+
 // SlidingWindowBreaker is a [Breaker] that uses a sliding window to determine the error rate.
 type SlidingWindowBreaker struct {
 	windowSize time.Duration
@@ -207,8 +216,6 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 		return stateChangeClose
 	}
 }
-
-var _ Option = (*SlidingWindowBreaker)(nil)
 
 // apply implements Option.
 func (s *SlidingWindowBreaker) apply(o *options) error {
