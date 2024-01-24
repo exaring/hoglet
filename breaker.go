@@ -34,7 +34,7 @@ func (s stateChange) String() string {
 // Observer is used to observe the result of a single wrapped call through the circuit breaker.
 // Calls in an open circuit cause no observer to be created.
 type Observer interface {
-	// Observe is called after the wrapped function returns. If [Circuit.Do] returns a non-nil [Observer], it will be
+	// Observe is called after the wrapped function returns. If [ObserverForCall] returns a non-nil [Observer], it will be
 	// called exactly once.
 	Observe(failure bool)
 }
@@ -170,9 +170,14 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 		return stateChangeClose
 	}
 
+	currentStartMicros := s.currentStart.Load()
+	sinceStart := sinceMicros(currentStartMicros)
+	firstCallInNewWindow := s.currentStart.CompareAndSwap(currentStartMicros, time.Now().UnixMicro())
+
 	// The second condition ensures only one goroutine can swap the windows. Necessary since multiple swaps would
 	// overwrite the last counts to some near zero value.
-	if currentStartMicros := s.currentStart.Load(); sinceMicros(currentStartMicros) > s.windowSize && s.currentStart.CompareAndSwap(currentStartMicros, time.Now().UnixMicro()) {
+	if sinceStart > s.windowSize && firstCallInNewWindow {
+		sinceStart = 0
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
 	} else {
@@ -190,7 +195,7 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 
 	// We use the last window's weight to determine how much the last window's failure rate should count.
 	// It is the remaining portion of the last window still "visible" in the current window.
-	lastWindowWeight := (sinceMicros(s.currentStart.Load()).Seconds() - s.windowSize.Seconds()) / s.windowSize.Seconds()
+	lastWindowWeight := max(0, s.windowSize.Seconds()-sinceStart.Seconds()) / s.windowSize.Seconds()
 
 	weightedFailures := float64(lastFailureCount)*lastWindowWeight + float64(currentFailureCount)
 	weightedTotal := float64(lastFailureCount+lastSuccessCount)*lastWindowWeight + float64(currentFailureCount+currentSuccessCount)
