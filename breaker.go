@@ -208,6 +208,19 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	}
 }
 
+var _ Option = (*SlidingWindowBreaker)(nil)
+
+// apply implements Option.
+func (s *SlidingWindowBreaker) apply(o *options) error {
+	if o.halfOpenDelay == 0 || o.halfOpenDelay > s.windowSize {
+		o.halfOpenDelay = s.windowSize
+	}
+	return nil
+}
+
 func sinceMicros(micros int64) time.Duration {
+	if micros == 0 {
+		return 0
+	}
 	return time.Since(time.UnixMicro(micros))
 }

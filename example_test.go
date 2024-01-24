@@ -14,10 +14,10 @@ type Foo struct {
 }
 
 func foo(ctx context.Context, bar int) (Foo, error) {
-	if bar == 42 {
-		return Foo{Bar: bar}, nil
+	if bar > 10 {
+		return Foo{}, fmt.Errorf("bar is too high!")
 	}
-	return Foo{}, fmt.Errorf("bar is not 42")
+	return Foo{Bar: bar}, nil
 }
 
 func ExampleEWMABreaker() {
@@ -30,49 +30,67 @@ func ExampleEWMABreaker() {
 		log.Fatal(err)
 	}
 
-	f, err := h.Call(context.Background(), 42)
+	f, err := h.Call(context.Background(), 1)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(f.Bar)
 
-	_, err = h.Call(context.Background(), 0)
+	_, err = h.Call(context.Background(), 100)
 	fmt.Println(err)
 
-	_, err = h.Call(context.Background(), 42)
+	_, err = h.Call(context.Background(), 2)
 	fmt.Println(err)
+
+	time.Sleep(time.Second) // wait for half-open delay
+
+	f, err = h.Call(context.Background(), 3)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(f.Bar)
 
 	// Output:
-	// 42
-	// bar is not 42
+	// 1
+	// bar is too high!
 	// hoglet: breaker is open
+	// 3
 }
 
 func ExampleSlidingWindowBreaker() {
 	h, err := hoglet.NewCircuit(
 		foo,
-		hoglet.NewSlidingWindowBreaker(10, 0.1),
+		hoglet.NewSlidingWindowBreaker(time.Second, 0.1),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	f, err := h.Call(context.Background(), 42)
+	f, err := h.Call(context.Background(), 1)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(f.Bar)
 
-	_, err = h.Call(context.Background(), 0)
+	_, err = h.Call(context.Background(), 100)
 	fmt.Println(err)
 
-	_, err = h.Call(context.Background(), 42)
+	_, err = h.Call(context.Background(), 2)
 	fmt.Println(err)
+
+	time.Sleep(time.Second) // wait for sliding window
+
+	f, err = h.Call(context.Background(), 3)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(f.Bar)
 
 	// Output:
-	// 42
-	// bar is not 42
+	// 1
+	// bar is too high!
 	// hoglet: breaker is open
+	// 3
 }
 
 func ExampleConcurrencyLimiter() {
