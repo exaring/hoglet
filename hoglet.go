@@ -98,6 +98,12 @@ func NewCircuit[IN, OUT any](f WrappedFunc[IN, OUT], breaker Breaker, opts ...Op
 		}
 	}
 
+	if breakerOpt, ok := breaker.(Option); ok {
+		if err := breakerOpt.apply(&o); err != nil {
+			return nil, fmt.Errorf("applying breaker option: %w", err)
+		}
+	}
+
 	c.options = o
 
 	if _, ok := breaker.(*EWMABreaker); ok && c.halfOpenDelay == 0 {
