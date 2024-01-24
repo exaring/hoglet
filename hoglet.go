@@ -166,6 +166,9 @@ func (c *Circuit[IN, OUT]) close() {
 //
 // It implements [ObserverFactory], so that the [Circuit] can act as the base for [BreakerMiddleware].
 func (c *Circuit[IN, OUT]) ObserverForCall(_ context.Context, state State) (Observer, error) {
+	if state == StateOpen {
+		return nil, ErrCircuitOpen
+	}
 	return stateObserver[IN, OUT]{
 		circuit: c,
 		state:   state,
@@ -203,17 +206,11 @@ func (c *Circuit[IN, OUT]) Call(ctx context.Context, in IN) (out OUT, err error)
 		return out, nil
 	}
 
-	state := c.stateForCall()
-
-	if state == StateOpen {
-		// ErrCircuitOpen does not count towards breaker's failure rate (so no "feedback loops")
-		return out, ErrCircuitOpen
-	}
-
-	obs, err := c.observerFactory.ObserverForCall(ctx, state)
+	obs, err := c.observerFactory.ObserverForCall(ctx, c.stateForCall())
 	if err != nil {
 		// Note: any errors here are not "observed" and do not count towards the breaker's failure rate.
 		// This includes:
+		// - ErrCircuitOpen
 		// - ErrConcurrencyLimit (for blocking limited circuits)
 		// - context timeouts while blocked on concurrency limit
 		// And any other errors that may be returned by optional breaker wrappers.
