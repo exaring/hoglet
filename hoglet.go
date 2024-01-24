@@ -42,6 +42,8 @@ type Breaker interface {
 	// The halfOpen parameter indicates whether the call was made in half-open state.
 	// The failure parameter indicates whether the call failed.
 	observe(halfOpen, failure bool) stateChange
+
+	Option // breakers can also modify or sanity-check their circuit's options
 }
 
 // ObserverFactory is an interface that allows customizing the per-call observer creation.
@@ -87,6 +89,8 @@ func NewCircuit[IN, OUT any](f WrappedFunc[IN, OUT], breaker Breaker, opts ...Op
 
 	if breaker != nil {
 		o.breaker = breaker
+		// apply breaker as last, so it can verify
+		opts = append(opts, breaker)
 	}
 
 	// the default observerFactory is the circuit itself
@@ -98,17 +102,7 @@ func NewCircuit[IN, OUT any](f WrappedFunc[IN, OUT], breaker Breaker, opts ...Op
 		}
 	}
 
-	if breakerOpt, ok := breaker.(Option); ok {
-		if err := breakerOpt.apply(&o); err != nil {
-			return nil, fmt.Errorf("applying breaker option: %w", err)
-		}
-	}
-
 	c.options = o
-
-	if _, ok := breaker.(*EWMABreaker); ok && c.halfOpenDelay == 0 {
-		return nil, fmt.Errorf("EWMABreaker requires a half-open delay")
-	}
 
 	return c, nil
 }
@@ -296,4 +290,8 @@ type noopBreaker struct{}
 
 func (noopBreaker) observe(halfOpen, failure bool) stateChange {
 	return stateChangeNone
+}
+
+func (noopBreaker) apply(*options) error {
+	return nil
 }

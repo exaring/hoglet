@@ -122,6 +122,10 @@ func (mt *mockBreaker) observe(halfOpen, failure bool) stateChange {
 	return stateChangeClose
 }
 
+func (mt *mockBreaker) apply(o *options) error {
+	return nil
+}
+
 func TestHoglet_Do(t *testing.T) {
 	type calls struct {
 		arg       noopIn
