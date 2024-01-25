@@ -16,7 +16,7 @@ h, err := hoglet.NewCircuit(
         }
         return Foo{}, fmt.Errorf("bar is not 42")
     },
-    hoglet.NewSlidingWindowBreaker(10, 0.1),
+    hoglet.NewSlidingWindowBreaker(5*time.Second, 0.1),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCanceled),
 )
 /* if err != nil ... */
@@ -29,6 +29,11 @@ fmt.Println(err) // bar is not 42
 
 _, err = h.Call(context.Background(), 42)
 fmt.Println(err) // hoglet: breaker is open
+
+time.Sleep(5 * time.Second)
+
+f, _ = h.Call(context.Background(), 42)
+fmt.Println(f.Bar) // 42
 ```
 
 ## Operation
