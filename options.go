@@ -52,7 +52,7 @@ func IgnoreContextCanceled(err error) bool {
 // middleware and should therefore be AFTER it in the parameter list.
 func WithBreakerMiddleware(bm BreakerMiddleware) Option {
 	return optionFunc(func(o *options) error {
-		b, err := bm(o.observerFactory)
+		b, err := bm.Wrap(o.observerFactory)
 		if err != nil {
 			return fmt.Errorf("creating middleware: %w", err)
 		}

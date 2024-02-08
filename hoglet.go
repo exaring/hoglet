@@ -53,8 +53,16 @@ type ObserverFactory interface {
 	ObserverForCall(context.Context, State) (Observer, error)
 }
 
-// BreakerMiddleware is a function that wraps an [ObserverFactory] and returns a new [ObserverFactory].
-type BreakerMiddleware func(ObserverFactory) (ObserverFactory, error)
+// BreakerMiddleware wraps an [ObserverFactory] and returns a new [ObserverFactory].
+type BreakerMiddleware interface {
+	Wrap(ObserverFactory) (ObserverFactory, error)
+}
+
+type BreakerMiddlewareFunc func(ObserverFactory) (ObserverFactory, error)
+
+func (f BreakerMiddlewareFunc) Wrap(of ObserverFactory) (ObserverFactory, error) {
+	return f(of)
+}
 
 // WrappedFunc is the type of the function wrapped by a Breaker.
 type WrappedFunc[IN, OUT any] func(context.Context, IN) (OUT, error)

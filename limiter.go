@@ -13,7 +13,7 @@ import (
 //   - or blocks until a slot is available if blocking is true, potentially returning [ErrWaitingForSlot]. The returned
 //     error wraps the underlying cause (e.g. [context.Canceled] or [context.DeadlineExceeded]).
 func ConcurrencyLimiter(limit int64, block bool) BreakerMiddleware {
-	return func(next ObserverFactory) (ObserverFactory, error) {
+	return BreakerMiddlewareFunc(func(next ObserverFactory) (ObserverFactory, error) {
 		cl := concurrencyLimiter{
 			sem:  semaphore.NewWeighted(limit),
 			next: next,
@@ -26,7 +26,7 @@ func ConcurrencyLimiter(limit int64, block bool) BreakerMiddleware {
 		return concurrencyLimiterNonBlocking{
 			concurrencyLimiter: cl,
 		}, nil
-	}
+	})
 }
 
 type concurrencyLimiter struct {

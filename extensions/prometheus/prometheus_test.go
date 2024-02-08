@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/exaring/hoglet"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -44,21 +43,20 @@ func (m mockTimesource) Since(t time.Time) time.Duration {
 }
 
 func TestWithPrometheusMetrics(t *testing.T) {
-	reg := prometheus.NewPedanticRegistry()
-	m := WithPrometheusMetrics("test", reg)
-	of, err := m(&mockObserverFactory{})
+	m := NewCollector("test")
+	of, err := m.Wrap(&mockObserverFactory{})
 	require.NoError(t, err)
 
 	mt := &mockTimesource{time.Now()}
 
-	of.(*prometheusObserverFactory).timesource = mt
+	of.(*wrappedMiddleware).timesource = mt
 
 	inflightOut0 := `# HELP hoglet_circuit_inflight_calls_current Current number of calls in-flight
                      # TYPE hoglet_circuit_inflight_calls_current gauge
                      hoglet_circuit_inflight_calls_current{circuit="test"} 0
                     `
 
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(inflightOut0)); err != nil {
+	if err := testutil.CollectAndCompare(m, strings.NewReader(inflightOut0)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,7 +70,7 @@ func TestWithPrometheusMetrics(t *testing.T) {
                     # TYPE hoglet_circuit_inflight_calls_current gauge
                     hoglet_circuit_inflight_calls_current{circuit="test"} 0
 				   `
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(droppedOut1)); err != nil {
+	if err := testutil.CollectAndCompare(m, strings.NewReader(droppedOut1)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +84,7 @@ func TestWithPrometheusMetrics(t *testing.T) {
                      # TYPE hoglet_circuit_inflight_calls_current gauge
                      hoglet_circuit_inflight_calls_current{circuit="test"} 1
 				   `
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(inflightOut1)); err != nil {
+	if err := testutil.CollectAndCompare(m, strings.NewReader(inflightOut1)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +116,7 @@ func TestWithPrometheusMetrics(t *testing.T) {
                       hoglet_circuit_inflight_calls_current{circuit="test"} 0
                      `
 
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(durationsOut1)); err != nil {
+	if err := testutil.CollectAndCompare(m, strings.NewReader(durationsOut1)); err != nil {
 		t.Fatal(err)
 	}
 }
