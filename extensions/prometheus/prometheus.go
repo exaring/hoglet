@@ -3,7 +3,6 @@ package hogprom
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -13,95 +12,102 @@ import (
 
 const (
 	namespace = "hoglet"
+	subsystem = "circuit"
 )
 
-// WithPrometheusMetrics returns a [hoglet.BreakerMiddleware] that registers prometheus metrics for the circuit.
+// NewCollector returns a [hoglet.BreakerMiddleware] that exposes prometheus metrics for the circuit.
+// It implements prometheus.Collector and can therefore be registered with a prometheus.Registerer.
 //
-// ⚠️ Note: the provided name must be unique across all hoglet instances using the same registerer.
-func WithPrometheusMetrics(circuitName string, reg prometheus.Registerer) hoglet.BreakerMiddleware {
-	return func(next hoglet.ObserverFactory) (hoglet.ObserverFactory, error) {
-		callDurations := prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Namespace: namespace,
-				Subsystem: "circuit",
-				Name:      "call_durations_seconds",
-				Help:      "Call durations in seconds",
-				ConstLabels: prometheus.Labels{
-					"circuit": circuitName,
-				},
+// ⚠️ Note: the provided name must be unique across all hoglet instances ultimately registered to the same
+// prometheus.Registerer.
+func NewCollector(circuitName string) *Middleware {
+	callDurations := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "call_durations_seconds",
+			Help:      "Call durations in seconds",
+			ConstLabels: prometheus.Labels{
+				"circuit": circuitName,
 			},
-			[]string{"success"},
-		)
+		},
+		[]string{"success"},
+	)
 
-		droppedCalls := prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: namespace,
-				Subsystem: "circuit",
-				Name:      "dropped_calls_total",
-				Help:      "Total number of calls with an open circuit (i.e.: calls that did not reach the wrapped function)",
-				ConstLabels: prometheus.Labels{
-					"circuit": circuitName,
-				},
+	droppedCalls := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "dropped_calls_total",
+			Help:      "Total number of calls with an open circuit (i.e.: calls that did not reach the wrapped function)",
+			ConstLabels: prometheus.Labels{
+				"circuit": circuitName,
 			},
-			[]string{"cause"},
-		)
+		},
+		[]string{"cause"},
+	)
 
-		inflightCalls := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: namespace,
-				Subsystem: "circuit",
-				Name:      "inflight_calls_current",
-				Help:      "Current number of calls in-flight",
-				ConstLabels: prometheus.Labels{
-					"circuit": circuitName,
-				},
+	inflightCalls := prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "inflight_calls_current",
+			Help:      "Current number of calls in-flight",
+			ConstLabels: prometheus.Labels{
+				"circuit": circuitName,
 			},
-		)
+		},
+	)
 
-		for _, c := range []prometheus.Collector{
-			callDurations,
-			droppedCalls,
-			inflightCalls,
-		} {
-			if err := reg.Register(c); err != nil {
-				return nil, fmt.Errorf("hoglet: registering collector: %w", err)
-			}
-		}
-
-		return &prometheusObserverFactory{
-			next: next,
-
-			timesource: wallclock{},
-
-			callDurations: callDurations,
-			droppedCalls:  droppedCalls,
-			inflightCalls: inflightCalls,
-		}, nil
+	return &Middleware{
+		callDurations: callDurations,
+		droppedCalls:  droppedCalls,
+		inflightCalls: inflightCalls,
 	}
 }
 
-type prometheusObserverFactory struct {
-	next hoglet.ObserverFactory
-
-	timesource timesource
-
+type Middleware struct {
 	callDurations *prometheus.HistogramVec
 	droppedCalls  *prometheus.CounterVec
 	inflightCalls prometheus.Gauge
 }
 
-func (pos *prometheusObserverFactory) ObserverForCall(ctx context.Context, state hoglet.State) (hoglet.Observer, error) {
-	o, err := pos.next.ObserverForCall(ctx, state)
+func (m Middleware) Collect(ch chan<- prometheus.Metric) {
+	m.callDurations.Collect(ch)
+	m.droppedCalls.Collect(ch)
+	m.inflightCalls.Collect(ch)
+}
+
+func (m Middleware) Describe(ch chan<- *prometheus.Desc) {
+	prometheus.DescribeByCollect(m, ch)
+}
+
+func (m Middleware) Wrap(of hoglet.ObserverFactory) (hoglet.ObserverFactory, error) {
+	return &wrappedMiddleware{
+		Middleware: m,
+		next:       of,
+		timesource: wallclock{},
+	}, nil
+}
+
+type wrappedMiddleware struct {
+	Middleware
+	next       hoglet.ObserverFactory
+	timesource timesource
+}
+
+func (wm *wrappedMiddleware) ObserverForCall(ctx context.Context, state hoglet.State) (hoglet.Observer, error) {
+	o, err := wm.next.ObserverForCall(ctx, state)
 	if err != nil {
-		pos.droppedCalls.WithLabelValues(errToCause(err)).Inc()
+		wm.droppedCalls.WithLabelValues(errToCause(err)).Inc()
 		return nil, err
 	}
-	start := pos.timesource.Now()
-	pos.inflightCalls.Inc()
+	start := wm.timesource.Now()
+	wm.inflightCalls.Inc()
 	return hoglet.ObserverFunc(func(b bool) {
 		// invert failure → success to make the metric more intuitive
-		pos.callDurations.WithLabelValues(strconv.FormatBool(!b)).Observe(pos.timesource.Since(start).Seconds())
-		pos.inflightCalls.Dec()
+		wm.callDurations.WithLabelValues(strconv.FormatBool(!b)).Observe(wm.timesource.Since(start).Seconds())
+		wm.inflightCalls.Dec()
 		o.Observe(b)
 	}), nil
 }

@@ -84,7 +84,7 @@ func Test_ConcurrencyLimiter(t *testing.T) {
 			defer wgStop.Wait()
 
 			cl := hoglet.ConcurrencyLimiter(tt.args.limit, tt.args.block)
-			of, err := cl(mockObserverFactory{})
+			of, err := cl.Wrap(mockObserverFactory{})
 			require.NoError(t, err)
 			for i := 0; i < tt.calls; i++ {
 				wantPanic := tt.wantPanicOn != nil && *tt.wantPanicOn == i
