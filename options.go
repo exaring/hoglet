@@ -44,7 +44,7 @@ func IgnoreContextCanceled(err error) bool {
 	return err != nil && !errors.Is(err, context.Canceled)
 }
 
-// WithMiddleware allows wrapping the [Breaker] via a [BreakerMiddleware].
+// WithBreakerMiddleware allows wrapping the [Breaker] via a [BreakerMiddleware].
 // Middlewares are processed from innermost to outermost, meaning the first added middleware is the closest to the
 // wrapped function.
 // ⚠️ This means ordering is significant: since "outer" middleware may react differently depending on the output of
