@@ -129,6 +129,11 @@ func (e *EWMABreaker) apply(o *options) error {
 	if o.halfOpenDelay == 0 {
 		return fmt.Errorf("EWMABreaker requires a half-open delay")
 	}
+
+	if e.threshold < 0 || e.threshold > 1 {
+		return fmt.Errorf("EWMABreaker threshold must be between 0 and 1")
+	}
+
 	return nil
 }
 
@@ -222,6 +227,11 @@ func (s *SlidingWindowBreaker) apply(o *options) error {
 	if o.halfOpenDelay == 0 || o.halfOpenDelay > s.windowSize {
 		o.halfOpenDelay = s.windowSize
 	}
+
+	if s.threshold < 0 || s.threshold > 1 {
+		return fmt.Errorf("SlidingWindowBreaker threshold must be between 0 and 1")
+	}
+
 	return nil
 }
 
