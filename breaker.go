@@ -206,8 +206,8 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	if sinceStart > s.windowSize && firstCallInNewWindow {
 		sinceStart = 0
 		// Atomically move current window counts to last window.
-		// Note: between these swaps and the observation below, other goroutines may increment the current counters,
-		// which is correct - those observations belong to the new window.
+		// Note: after these swaps, other goroutines may increment the current counters with their observations,
+		// which is correct - those observations will belong to the new window that just started.
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
 	} else {
