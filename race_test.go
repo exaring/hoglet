@@ -47,7 +47,7 @@ func TestEWMABreaker_ConcurrentObservations(t *testing.T) {
 	
 	// With many observations at ~50% failure rate, it should converge near 0.5
 	// Allow some variance due to the EWMA nature
-	assert.InDelta(t, 0.5, finalRate, 0.3, "failure rate should converge near 50%%")
+	assert.InDelta(t, 0.5, finalRate, 0.3, "failure rate should converge near 50%")
 }
 
 // TestSlidingWindowBreaker_ConcurrentWindowSwap tests that concurrent calls
