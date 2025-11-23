@@ -108,13 +108,26 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 		value = 1.0
 	}
 
-	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
-	failureRate := fromStore(e.failureRate.Swap(toStore(value)))
-	if failureRate == math.SmallestNonzeroFloat64 {
-		failureRate = value
-	} else {
-		failureRate = (value * e.decay) + (failureRate * (1 - e.decay))
-		e.failureRate.Store(toStore(failureRate))
+	// Use CompareAndSwap loop to atomically update the EWMA to avoid race conditions
+	// where concurrent observations could read raw values instead of the EWMA.
+	var failureRate float64
+	for {
+		oldBits := e.failureRate.Load()
+		oldRate := fromStore(oldBits)
+		
+		if oldRate == math.SmallestNonzeroFloat64 {
+			// First observation - initialize with the current value
+			failureRate = value
+		} else {
+			// Compute EWMA
+			failureRate = (value * e.decay) + (oldRate * (1 - e.decay))
+		}
+		
+		// Try to swap in the new rate atomically
+		if e.failureRate.CompareAndSwap(oldBits, toStore(failureRate)) {
+			break
+		}
+		// If CAS failed, another goroutine updated it; retry
 	}
 
 	if failureRate > e.threshold {
@@ -192,6 +205,9 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	// overwrite the last counts to some near zero value.
 	if sinceStart > s.windowSize && firstCallInNewWindow {
 		sinceStart = 0
+		// Atomically move current window counts to last window.
+		// Note: between these swaps and the observation below, other goroutines may increment the current counters,
+		// which is correct - those observations belong to the new window.
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
 	} else {
