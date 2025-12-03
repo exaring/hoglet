@@ -9,30 +9,32 @@ Simple low-overhead circuit breaker library.
 ## Usage
 
 ```go
+// some arbitrary function
+foo := func(ctx context.Context, bar int) (Foo, error) {
+    if bar == 42 {
+        return Foo{Bar: bar}, nil
+    }
+    return Foo{}, fmt.Errorf("bar is not 42")
+}
+
 h, err := hoglet.NewCircuit(
-    func(ctx context.Context, bar int) (Foo, error) {
-        if bar == 42 {
-            return Foo{Bar: bar}, nil
-        }
-        return Foo{}, fmt.Errorf("bar is not 42")
-    },
     hoglet.NewSlidingWindowBreaker(5*time.Second, 0.1),
     hoglet.WithFailureCondition(hoglet.IgnoreContextCanceled),
 )
 /* if err != nil ... */
 
-f, _ := h.Call(context.Background(), 42)
+f, _ := hoglet.Wrap(h, foo)(context.Background(), 42)
 fmt.Println(f.Bar) // 42
 
-_, err = h.Call(context.Background(), 0)
+_, err = hoglet.Wrap(h, foo)(context.Background(), 0)
 fmt.Println(err) // bar is not 42
 
-_, err = h.Call(context.Background(), 42)
+_, err = hoglet.Wrap(h, foo)(context.Background(), 42)
 fmt.Println(err) // hoglet: breaker is open
 
 time.Sleep(5 * time.Second)
 
-f, _ = h.Call(context.Background(), 42)
+f, _ = hoglet.Wrap(h, foo)(context.Background(), 42)
 fmt.Println(f.Bar) // 42
 ```
 
