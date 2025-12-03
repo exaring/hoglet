@@ -33,79 +33,82 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 }
 
 func BenchmarkHoglet_Do_EWMA(b *testing.B) {
+	noop := func(context.Context, struct{}) (out struct{}, err error) { return }
 	h, err := NewCircuit(
-		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewEWMABreaker(10, 0.9),
 		WithHalfOpenDelay(time.Second),
 		// WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
 	)
 	require.NoError(b, err)
 
-	ctx := context.Background()
+	ctx := context.Background() // b.Context() introduces some overhead
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	f := Wrap(h, noop)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _ = h.Call(ctx, struct{}{})
+			_, _ = f(ctx, struct{}{})
 		}
 	})
 }
 
 func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
+	noop := func(context.Context, struct{}) (out struct{}, err error) { return }
+
 	h, err := NewCircuit(
-		func(context.Context, struct{}) (out struct{}, err error) { return },
 		NewSlidingWindowBreaker(10*time.Second, 0.9),
 		// WithBreakerMiddleware(ConcurrencyLimiter(1, true)),
 	)
 	require.NoError(b, err)
 
-	ctx := context.Background()
+	ctx := context.Background() // b.Context() introduces some overhead
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	f := Wrap(h, noop)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _ = h.Call(ctx, struct{}{})
+			_, _ = f(ctx, struct{}{})
 		}
 	})
 }
 
 func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
-	b, err := NewCircuit(noop, nil)
+	b, err := NewCircuit(nil)
 	require.NoError(t, err)
-	_, err = b.Call(context.Background(), noopInFailure)
+	_, err = Wrap(b, noop)(t.Context(), noopInFailure)
 	assert.Equal(t, sentinel, err)
-	_, err = b.Call(context.Background(), noopInFailure)
+	_, err = Wrap(b, noop)(t.Context(), noopInFailure)
 	assert.Equal(t, sentinel, err)
 }
 
 func TestBreaker_ctx_parameter_not_cancelled(t *testing.T) {
-	b, err := NewCircuit(func(ctx context.Context, _ any) (context.Context, error) {
-		return ctx, nil
-	}, nil)
+	noop := func(ctx context.Context, _ any) (context.Context, error) { return ctx, nil }
+	b, err := NewCircuit(nil)
 	require.NoError(t, err)
-	ctx, err := b.Call(context.Background(), noopInSuccess)
+	ctx, err := Wrap(b, noop)(t.Context(), noopInSuccess)
 
 	require.NoError(t, err)
 	assert.NoError(t, ctx.Err())
 }
 
 func TestCircuit_ignored_context_cancellation_still_returned(t *testing.T) {
+	noop := func(ctx context.Context, _ any) (string, error) {
+		return "expected", ctx.Err()
+	}
+
 	b, err := NewCircuit(
-		func(ctx context.Context, _ any) (string, error) {
-			return "expected", ctx.Err()
-		},
 		nil,
 		WithFailureCondition(IgnoreContextCanceled))
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	out, err := b.Call(ctx, nil)
+	out, err := Wrap(b, noop)(ctx, nil)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "expected", out)
 }
@@ -182,12 +185,11 @@ func TestHoglet_Do(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			mt := &mockBreaker{}
-			h, err := NewCircuit(noop, mt, WithHalfOpenDelay(time.Minute))
+			h, err := NewCircuit(mt, WithHalfOpenDelay(time.Minute))
 			require.NoError(t, err)
 			for i, call := range tt.calls {
 				if call.halfOpen {
@@ -197,7 +199,7 @@ func TestHoglet_Do(t *testing.T) {
 
 				var err error
 				maybeAssertPanic(t, func() {
-					_, err = h.Call(context.Background(), call.arg)
+					_, err = Wrap(h, noop)(t.Context(), call.arg)
 				}, call.wantPanic)
 				assert.Equal(t, call.wantErr, err, "unexpected error on call %d: %v", i, err)
 			}
