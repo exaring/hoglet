@@ -14,5 +14,6 @@
 /go.work*
 
 *.bench
+*.profile
 
 .idea/
