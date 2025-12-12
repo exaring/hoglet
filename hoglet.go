@@ -138,16 +138,31 @@ func (c *Circuit[IN, OUT]) State() State {
 // stateForCall returns the state of the circuit meant for the next call.
 // It wraps [State] to keep the mutable part outside of the external API.
 func (c *Circuit[IN, OUT]) stateForCall() State {
-	state := c.State()
+	for {
+		oa := c.openedAt.Load()
 
-	if state == StateHalfOpen {
-		// We reset openedAt to block further calls to pass through when half-open. A success will cause the breaker to
-		// close. This is slightly racy: multiple goroutines may reach this point concurrently since we do not lock the
-		// breaker.
-		c.reopen()
+		if oa == 0 {
+			// closed
+			return StateClosed
+		}
+
+		if c.halfOpenDelay == 0 || time.Since(time.UnixMicro(oa)) < c.halfOpenDelay {
+			// open
+			return StateOpen
+		}
+
+		// half-open: try to atomically transition to reopened state
+		// Only one goroutine should succeed, limiting concurrent calls in half-open to ~1
+		reopenedAt := time.Now().UnixMicro()
+		if c.openedAt.CompareAndSwap(oa, reopenedAt) {
+			// This goroutine won the race and can proceed with a call
+			return StateHalfOpen
+		}
+
+		// Another goroutine already transitioned from half-open; re-check the new state
+		// (should typically return StateOpen since we just reopened, or StateClosed if the call succeeded)
+		// Loop to avoid stack overflow in high-contention scenarios
 	}
-
-	return state
 }
 
 // open marks the circuit as open, if it not already.
