@@ -198,7 +198,7 @@ func (s stateObserver) Observe(failure bool) {
 
 // Wrap wraps the provided function with the given [Circuit].
 //
-// Calling the returned function if the circuit is closed and returns the result of the wrapped function.
+// The returned function calls the wrapped function if the circuit is closed and returns its result.
 // If the circuit is open, it returns [ErrCircuitOpen].
 //
 // The wrapped function is called synchronously, but possible context errors are recorded as soon as they occur. This
