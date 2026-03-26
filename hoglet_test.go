@@ -207,6 +207,22 @@ func TestHoglet_Do(t *testing.T) {
 	}
 }
 
+func TestCircuit_failure_condition_never_called_with_nil_error(t *testing.T) {
+	conditionCalled := false
+	condition := func(err error) bool {
+		conditionCalled = true
+		require.NotNil(t, err, "failure condition must not be called with nil error")
+		return true
+	}
+
+	b, err := NewCircuit(nil, WithFailureCondition(condition))
+	require.NoError(t, err)
+
+	_, err = Wrap(b, noop)(t.Context(), noopInSuccess)
+	require.NoError(t, err)
+	assert.False(t, conditionCalled, "failure condition should not have been called for a successful call")
+}
+
 // maybeAssertPanic is a test-table helper to assert that a function panics or not, depending on the value of wantPanic.
 func maybeAssertPanic(t *testing.T, f func(), wantPanic any) {
 	wrapped := assert.NotPanics
