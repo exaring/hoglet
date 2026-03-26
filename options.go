@@ -31,7 +31,7 @@ func WithHalfOpenDelay(delay time.Duration) Option {
 // breaker logic).
 // Nil errors are always considered successes. The provided function is only called in the non-nil error case.
 //
-// This does not modify the error returned by [Circuit.Call]. It only affects the circuit itself.
+// This does not modify the error returned by the wrapped function call. It only affects the circuit itself.
 func WithFailureCondition(condition func(error) bool) Option {
 	return optionFunc(func(o *options) error {
 		o.isFailure = condition
