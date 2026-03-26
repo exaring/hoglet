@@ -207,6 +207,25 @@ func TestHoglet_Do(t *testing.T) {
 	}
 }
 
+// TestCircuit_failure_condition_never_called_with_nil ensures that the nil guard in hoglet.go prevents
+// custom failure conditions from ever receiving a nil error.
+func TestCircuit_failure_condition_never_called_with_nil(t *testing.T) {
+	// panicOnNil is a failure condition that panics if called with nil, acting as a strict regression guard.
+	panicOnNil := func(err error) bool {
+		if err == nil {
+			panic("failure condition must never be called with nil error")
+		}
+		return true
+	}
+
+	b, err := NewCircuit(nil, WithFailureCondition(panicOnNil))
+	require.NoError(t, err)
+
+	assert.NotPanics(t, func() {
+		_, _ = Wrap(b, noop)(t.Context(), noopInSuccess)
+	})
+}
+
 // maybeAssertPanic is a test-table helper to assert that a function panics or not, depending on the value of wantPanic.
 func maybeAssertPanic(t *testing.T, f func(), wantPanic any) {
 	wrapped := assert.NotPanics
