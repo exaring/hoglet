@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var sentinel = errors.New("sentinel error")
+var errSentinel = errors.New("sentinel error")
 
 type noopIn int
 
@@ -26,7 +26,7 @@ func noop(ctx context.Context, in noopIn) (struct{}, error) {
 	case noopInSuccess:
 		return struct{}{}, nil
 	case noopInFailure:
-		return struct{}{}, sentinel
+		return struct{}{}, errSentinel
 	default: // noopInPanic
 		panic("boom")
 	}
@@ -80,9 +80,9 @@ func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
 	b, err := NewCircuit(nil)
 	require.NoError(t, err)
 	_, err = Wrap(b, noop)(t.Context(), noopInFailure)
-	assert.Equal(t, sentinel, err)
+	assert.Equal(t, errSentinel, err)
 	_, err = Wrap(b, noop)(t.Context(), noopInFailure)
-	assert.Equal(t, sentinel, err)
+	assert.Equal(t, errSentinel, err)
 }
 
 func TestBreaker_ctx_parameter_not_cancelled(t *testing.T) {
@@ -152,7 +152,7 @@ func TestHoglet_Do(t *testing.T) {
 			name: "error opens",
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
-				{arg: noopInFailure, wantErr: sentinel},
+				{arg: noopInFailure, wantErr: errSentinel},
 				{arg: noopInSuccess, wantErr: ErrCircuitOpen},
 			},
 		},
@@ -168,7 +168,7 @@ func TestHoglet_Do(t *testing.T) {
 			name: "success on half-open closes",
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
-				{arg: noopInFailure, wantErr: sentinel},
+				{arg: noopInFailure, wantErr: errSentinel},
 				{arg: noopInSuccess, wantErr: nil, halfOpen: true},
 				{arg: noopInSuccess, wantErr: nil},
 			},
@@ -177,8 +177,8 @@ func TestHoglet_Do(t *testing.T) {
 			name: "failure on half-open keeps open",
 			calls: []calls{
 				{arg: noopInSuccess, wantErr: nil},
-				{arg: noopInFailure, wantErr: sentinel},
-				{arg: noopInFailure, wantErr: sentinel, halfOpen: true},
+				{arg: noopInFailure, wantErr: errSentinel},
+				{arg: noopInFailure, wantErr: errSentinel, halfOpen: true},
 				{arg: noopInSuccess, wantErr: ErrCircuitOpen},
 			},
 		},
@@ -211,7 +211,7 @@ func TestHoglet_Do(t *testing.T) {
 func maybeAssertPanic(t *testing.T, f func(), wantPanic any) {
 	wrapped := assert.NotPanics
 	if wantPanic != nil {
-		wrapped = func(t assert.TestingT, f assert.PanicTestFunc, msgAndArgs ...interface{}) bool {
+		wrapped = func(t assert.TestingT, f assert.PanicTestFunc, msgAndArgs ...any) bool {
 			return assert.PanicsWithValue(t, wantPanic, f, msgAndArgs...)
 		}
 	}
