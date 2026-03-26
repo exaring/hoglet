@@ -167,9 +167,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		for bName, b := range tt.breakers {
-			b := b
 			t.Run(bName+": "+tt.name, func(t *testing.T) {
 				t.Parallel()
 

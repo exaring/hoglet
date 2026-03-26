@@ -29,7 +29,7 @@ func WithHalfOpenDelay(delay time.Duration) Option {
 // WithFailureCondition allows specifying a filter function that determines whether an error should open the breaker.
 // If the provided function returns true, the error is considered a failure and the breaker may open (depending on the
 // breaker logic).
-// The default filter considers all non-nil errors as failures (err != nil).
+// Nil errors are always considered successes. The provided function is only called in the non-nil error case.
 //
 // This does not modify the error returned by [Circuit.Call]. It only affects the circuit itself.
 func WithFailureCondition(condition func(error) bool) Option {
@@ -41,7 +41,7 @@ func WithFailureCondition(condition func(error) bool) Option {
 
 // IgnoreContextCanceled is a helper function for [WithFailureCondition] that ignores [context.Canceled] errors.
 func IgnoreContextCanceled(err error) bool {
-	return err != nil && !errors.Is(err, context.Canceled)
+	return !errors.Is(err, context.Canceled)
 }
 
 // WithBreakerMiddleware allows wrapping the [Breaker] via a [BreakerMiddleware].
