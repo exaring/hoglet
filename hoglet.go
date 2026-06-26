@@ -201,6 +201,11 @@ func (s stateObserver) Observe(failure bool) {
 // The returned function calls the wrapped function if the circuit is closed and returns its result.
 // If the circuit is open, it returns [ErrCircuitOpen].
 //
+// A single [Circuit] may wrap multiple functions of differing signatures. Those functions then share a single failure
+// domain: state and failure rate are shared, so a failure in one opens the circuit for all of them. Wrap functions that
+// share a downstream dependency (e.g. several methods against the same backend) on one circuit; use separate circuits
+// for independent dependencies.
+//
 // The wrapped function is called synchronously, but possible context errors are recorded as soon as they occur. This
 // ensures the circuit opens quickly, even if the wrapped function blocks.
 //

@@ -23,6 +23,11 @@ func (f optionFunc) apply(o *options) error {
 // Breakers may require or constrain this value: [EWMABreaker] requires a non-zero delay (it cannot recover without one),
 // while [SlidingWindowBreaker] defaults it to its window size and rejects a value exceeding it. Such violations are
 // reported as errors by [NewCircuit].
+//
+// Note: the half-open throttle is launch-rate based, not in-flight based. Each probe resets the delay, so a new probe
+// is admitted roughly every delay regardless of whether the previous one has returned. Against a slow (rather than
+// failing) dependency this can result in multiple concurrent in-flight probes. To bound the number of concurrent
+// probes instead, compose a [ConcurrencyLimiter] middleware via [WithBreakerMiddleware].
 func WithHalfOpenDelay(delay time.Duration) Option {
 	return optionFunc(func(o *options) error {
 		o.halfOpenDelay = delay
