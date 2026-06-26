@@ -221,14 +221,25 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			return out, err
 		}
 
-		// ensure we dedup the final - potentially wrapped - observer.
-		obs = dedupObservableCall(obs)
+		// The watchdog goroutine exists to record a context cancellation/deadline as a failure promptly, even if the
+		// wrapped function ignores its context and blocks. If the context can never be canceled (no deadline and no
+		// cancellation, e.g. [context.Background]), the watchdog can never fire usefully, so we skip it and the
+		// associated context allocation entirely, relying solely on the deferred observation below.
+		//
+		// TODO: allow skipping the watchdog via an option for callers that guarantee their wrapped function respects
+		// its context, trading prompt cancellation detection for one less goroutine + context allocation per call.
+		if ctx.Done() != nil {
+			// Only here can the watchdog race the deferred observe, so dedup to ensure the - potentially wrapped -
+			// observer is observed exactly once. Without a watchdog the deferred func below is the sole observer
+			// (normal return and panic go through the same defer and are mutually exclusive), so no dedup is needed.
+			// This relies on breaker middleware observing synchronously; an async middleware observer must dedup itself.
+			obs = dedupObservableCall(obs)
 
-		obsCtx, cancel := context.WithCancelCause(ctx)
-		defer cancel(errWrappedFunctionDone)
+			obsCtx, cancel := context.WithCancelCause(ctx)
+			defer cancel(errWrappedFunctionDone)
 
-		// TODO: we could skip this if we could ensure the original context has neither cancellation nor deadline
-		go c.observeCtx(obs, obsCtx)
+			go c.observeCtx(obs, obsCtx)
+		}
 
 		defer func() {
 			// ensure we also open the breaker on panics
