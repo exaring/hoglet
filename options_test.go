@@ -37,3 +37,16 @@ func TestWithHalfOpenDelay(t *testing.T) {
 		})
 	}
 }
+
+func TestSlidingWindowBreaker_halfOpenDelay_exceeding_window_errors(t *testing.T) {
+	_, err := hoglet.NewCircuit(
+		hoglet.NewSlidingWindowBreaker(time.Second, 0.1),
+		hoglet.WithHalfOpenDelay(2*time.Second),
+	)
+	require.Error(t, err, "expected error when half-open delay exceeds window size")
+}
+
+func TestSlidingWindowBreaker_halfOpenDelay_unset_defaults_to_window(t *testing.T) {
+	_, err := hoglet.NewCircuit(hoglet.NewSlidingWindowBreaker(time.Second, 0.1))
+	require.NoError(t, err, "unset half-open delay should default to the window size")
+}

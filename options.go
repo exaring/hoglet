@@ -19,6 +19,10 @@ func (f optionFunc) apply(o *options) error {
 
 // WithHalfOpenDelay sets the duration the circuit will stay open before switching to the half-open state, where a
 // limited (~1) amount of calls are allowed that - if successful - may re-close the breaker.
+//
+// Breakers may require or constrain this value: [EWMABreaker] requires a non-zero delay (it cannot recover without one),
+// while [SlidingWindowBreaker] defaults it to its window size and rejects a value exceeding it. Such violations are
+// reported as errors by [NewCircuit].
 func WithHalfOpenDelay(delay time.Duration) Option {
 	return optionFunc(func(o *options) error {
 		o.halfOpenDelay = delay
