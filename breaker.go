@@ -155,10 +155,11 @@ type SlidingWindowBreaker struct {
 //
 // This is a time-based breaker, which means it will revert back to closed after its window size has passed: if no
 // observations are made in the window, the failure rate is effectively zero.
-// This also means: if the circuit has a halfOpenDelay and it is bigger than windowSize, the breaker will never enter
-// half-open state and will directly close instead.
-// Conversely, if halfOpenDelay is smaller than windowSize, the errors observed in the last window will still count
-// proportionally in half-open state, which will lead to faster re-opening on errors.
+// The half-open delay (see [WithHalfOpenDelay]) defaults to windowSize when unset and may not exceed it (a larger delay
+// would never let the circuit go half-open, since the window expires and closes it first); an explicit larger value is
+// rejected by [NewCircuit].
+// If halfOpenDelay is smaller than windowSize, the errors observed in the last window will still count proportionally in
+// half-open state, which will lead to faster re-opening on errors.
 //
 // The windowSize is the time interval over which to calculate the failure rate.
 //
@@ -224,12 +225,18 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 
 // apply implements Option.
 func (s *SlidingWindowBreaker) apply(o *options) error {
-	if o.halfOpenDelay == 0 || o.halfOpenDelay > s.windowSize {
-		o.halfOpenDelay = s.windowSize
-	}
-
 	if s.threshold < 0 || s.threshold > 1 {
 		return fmt.Errorf("SlidingWindowBreaker threshold must be between 0 and 1")
+	}
+
+	switch {
+	case o.halfOpenDelay == 0:
+		// Unset: default to the window size, after which the breaker self-heals anyway.
+		o.halfOpenDelay = s.windowSize
+	case o.halfOpenDelay > s.windowSize:
+		// An explicit delay larger than the window would never let the circuit go half-open (the window expires and
+		// closes it first), so reject it instead of silently discarding the caller's value.
+		return fmt.Errorf("SlidingWindowBreaker half-open delay (%s) cannot exceed window size (%s)", o.halfOpenDelay, s.windowSize)
 	}
 
 	return nil
