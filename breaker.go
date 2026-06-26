@@ -144,7 +144,7 @@ type SlidingWindowBreaker struct {
 
 	// State
 
-	currentStart        atomic.Int64 // in unix microseconds
+	currentStart        atomic.Int64 // monotonic nanoseconds since start (see nowNanos)
 	currentSuccessCount atomic.Int64
 	currentFailureCount atomic.Int64
 	lastSuccessCount    atomic.Int64
@@ -184,9 +184,9 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 		return stateChangeClose
 	}
 
-	currentStartMicros := s.currentStart.Load()
-	sinceStart := sinceMicros(currentStartMicros)
-	firstCallInNewWindow := s.currentStart.CompareAndSwap(currentStartMicros, time.Now().UnixMicro())
+	currentStartNanos := s.currentStart.Load()
+	sinceStart := sinceNanos(currentStartNanos)
+	firstCallInNewWindow := s.currentStart.CompareAndSwap(currentStartNanos, nowNanos())
 
 	// The second condition ensures only one goroutine can swap the windows. Necessary since multiple swaps would
 	// overwrite the last counts to some near zero value.
@@ -233,11 +233,4 @@ func (s *SlidingWindowBreaker) apply(o *options) error {
 	}
 
 	return nil
-}
-
-func sinceMicros(micros int64) time.Duration {
-	if micros == 0 {
-		return 0
-	}
-	return time.Since(time.UnixMicro(micros))
 }
