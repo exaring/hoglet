@@ -190,9 +190,16 @@ func (s stateObserver) Observe(failure bool) {
 	case stateChangeNone:
 		return // noop
 	case stateChangeOpen:
-		s.circuit.open()
+		// Only write if not already open. A Load keeps the openedAt cache line in shared state across cores, whereas
+		// open()'s read-modify-write would needlessly invalidate it on every hot-path call.
+		if s.circuit.openedAt.Load() == 0 {
+			s.circuit.open()
+		}
 	case stateChangeClose:
-		s.circuit.close()
+		// Likewise, only clear if currently open, so a healthy closed circuit stays read-only on the hot path.
+		if s.circuit.openedAt.Load() != 0 {
+			s.circuit.close()
+		}
 	}
 }
 
