@@ -150,6 +150,12 @@ func (c *Circuit) stateForCall() State {
 // open marks the circuit as open, if it not already.
 // It is safe for concurrent calls and only the first one will actually set opening time.
 func (c *Circuit) open() {
+	// Only attempt to open if currently closed. This avoids the CAS/RMW when the breaker signals open while
+	// openedAt is already non-zero (e.g., repeated open signals during half-open/concurrent transitions).
+	if c.openedAt.Load() != 0 {
+		return // noop
+	}
+
 	// CompareAndSwap is needed to avoid clobbering another goroutine's openedAt value.
 	c.openedAt.CompareAndSwap(0, time.Now().UnixMicro())
 }
@@ -161,6 +167,10 @@ func (c *Circuit) reopen() {
 
 // close closes the circuit.
 func (c *Circuit) close() {
+	// Likewise, only clear if currently open, so a healthy closed circuit stays read-only on the hot path.
+	if c.openedAt.Load() == 0 {
+		return // noop
+	}
 	c.openedAt.Store(0)
 }
 
