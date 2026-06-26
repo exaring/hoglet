@@ -21,14 +21,18 @@ func TestEWMABreaker_zero_value_does_not_panic(t *testing.T) {
 	})
 }
 
+// testSeed is a fixed seed for the per-subtest RNG so the statistically-driven EWMA stages are deterministic and
+// reproducible across runs (chosen so the "constant low/high failure rate" cases land on their expected state).
+const testSeed = 0
+
 func TestBreaker_Observe_State(t *testing.T) {
 	// helper functions to make tests stages more readable
-	alwaysFailure := func(int) bool { return true }
-	alwaysSuccessful := func(int) bool { return false }
+	alwaysFailure := func(*rand.Rand, int) bool { return true }
+	alwaysSuccessful := func(*rand.Rand, int) bool { return false }
 
 	type stages struct {
 		calls           int
-		failureFunc     func(int) bool
+		failureFunc     func(r *rand.Rand, call int) bool
 		waitForHalfOpen bool        // whether to put circuit in half-open BEFORE observing the call's result
 		wantStateChange stateChange // expected state change at the END of the stage
 	}
@@ -110,23 +114,23 @@ func TestBreaker_Observe_State(t *testing.T) {
 			},
 		},
 		{
-			name: "constant low failure rate stays mostly closed (EWMA flaky)",
+			name: "constant low failure rate stays mostly closed",
 			breakers: map[string]Breaker{
 				"ewma":          NewEWMABreaker(50, 0.2),
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.1 }, wantStateChange: stateChangeClose},
+				{calls: 100, failureFunc: func(r *rand.Rand, _ int) bool { return r.Float64() < 0.1 }, wantStateChange: stateChangeClose},
 			},
 		},
 		{
-			name: "constant high failure rate stays mostly open (EWMA flaky)",
+			name: "constant high failure rate stays mostly open",
 			breakers: map[string]Breaker{
 				"ewma":          NewEWMABreaker(50, 0.2),
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.2),
 			},
 			stages: []stages{
-				{calls: 100, failureFunc: func(int) bool { return rand.Float64() < 0.4 }, wantStateChange: stateChangeOpen},
+				{calls: 100, failureFunc: func(r *rand.Rand, _ int) bool { return r.Float64() < 0.4 }, wantStateChange: stateChangeOpen},
 			},
 		},
 		{
@@ -171,11 +175,14 @@ func TestBreaker_Observe_State(t *testing.T) {
 			t.Run(bName+": "+tt.name, func(t *testing.T) {
 				t.Parallel()
 
+				// per-subtest RNG with a fixed seed: deterministic and independent of other parallel subtests.
+				rng := rand.New(rand.NewSource(testSeed))
+
 				for _, s := range tt.stages {
 					var lastStateChange stateChange
 
 					for i := 1; i <= s.calls; i++ {
-						failure := s.failureFunc(i)
+						failure := s.failureFunc(rng, i)
 						switch b := b.(type) {
 						case *EWMABreaker:
 							lastStateChange = ignoreNone(lastStateChange, b.observe(s.waitForHalfOpen && i == s.calls, failure))
