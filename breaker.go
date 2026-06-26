@@ -76,15 +76,18 @@ type EWMABreaker struct {
 // Compared to the [SlidingWindowBreaker], this breaker responds faster to failure bursts, but is more lenient with
 // constant failure rates.
 //
-// The sample count is used to determine how fast previous observations "decay". A value of 1 causes a single sample to
-// be considered. A higher value slows down convergence. As a rule of thumb, breakers with higher throughput should use
-// higher sample counts to avoid opening up on small hiccups.
+// The sample count must be at least 1 and is used to determine how fast previous observations "decay". A value of 1
+// causes only the newest sample to be considered. A higher value slows down convergence. As a rule of thumb, breakers
+// with higher throughput should use higher sample counts to avoid opening up on small hiccups. A sample count of 0 is
+// rejected by [NewCircuit].
 //
 // The failureThreshold is the failure rate above which the breaker should open (0.0-1.0).
 func NewEWMABreaker(sampleCount uint, failureThreshold float64) *EWMABreaker {
 	e := &EWMABreaker{
-		// https://en.wikipedia.org/wiki/Exponential_smoothing
-		decay:     2 / (float64(sampleCount)/2 + 1),
+		// Span-based exponential smoothing factor: https://en.wikipedia.org/wiki/Exponential_smoothing
+		// decay = 2/(N+1) lies in (0,1] for every sampleCount >= 1 (and is exactly 1 at sampleCount == 1, i.e. only the
+		// newest sample counts). sampleCount == 0 yields decay = 2, which is rejected in apply.
+		decay:     2 / (float64(sampleCount) + 1),
 		threshold: failureThreshold,
 	}
 
@@ -132,6 +135,12 @@ func (e *EWMABreaker) apply(o *options) error {
 
 	if e.threshold < 0 || e.threshold > 1 {
 		return fmt.Errorf("EWMABreaker threshold must be between 0 and 1")
+	}
+
+	// decay > 1 means an out-of-range smoothing factor, which only happens for a sample count of 0 (see
+	// [NewEWMABreaker]). The zero-value breaker has decay == 0 and is deliberately allowed (it never opens).
+	if e.decay > 1 {
+		return fmt.Errorf("EWMABreaker requires a sample count of at least 1")
 	}
 
 	return nil
