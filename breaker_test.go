@@ -21,6 +21,17 @@ func TestEWMABreaker_zero_value_does_not_panic(t *testing.T) {
 	})
 }
 
+func TestEWMABreaker_sample_count_of_1_is_single_sample(t *testing.T) {
+	// sampleCount == 1 must yield decay == 1 (only the newest sample counts), i.e. a valid in-range smoothing factor.
+	b := NewEWMABreaker(1, 0.5)
+	assert.Equal(t, 1.0, b.decay)
+}
+
+func TestEWMABreaker_sample_count_of_0_is_rejected(t *testing.T) {
+	_, err := NewCircuit(NewEWMABreaker(0, 0.5), WithHalfOpenDelay(time.Second))
+	assert.Error(t, err, "expected a sample count of 0 to be rejected")
+}
+
 // testSeed is a fixed seed for the per-subtest RNG so the statistically-driven EWMA stages are deterministic and
 // reproducible across runs (chosen so the "constant low/high failure rate" cases land on their expected state).
 const testSeed = 0
