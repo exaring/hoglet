@@ -18,7 +18,7 @@ type Circuit struct {
 
 	// State
 
-	openedAt atomic.Int64 // unix microseconds
+	openedAt atomic.Int64 // monotonic nanoseconds since start (see [nowNanos]); 0 = closed
 }
 
 // options is a sub-struct to avoid requiring type parameters in the [Option] type.
@@ -123,7 +123,7 @@ func (c *Circuit) State() State {
 		return StateClosed
 	}
 
-	if c.halfOpenDelay == 0 || time.Since(time.UnixMicro(oa)) < c.halfOpenDelay {
+	if c.halfOpenDelay == 0 || sinceNanos(oa) < c.halfOpenDelay {
 		// open
 		return StateOpen
 	}
@@ -151,17 +151,37 @@ func (c *Circuit) stateForCall() State {
 // It is safe for concurrent calls and only the first one will actually set opening time.
 func (c *Circuit) open() {
 	// CompareAndSwap is needed to avoid clobbering another goroutine's openedAt value.
-	c.openedAt.CompareAndSwap(0, time.Now().UnixMicro())
+	c.openedAt.CompareAndSwap(0, nowNanos())
 }
 
 // reopen forcefully (re)marks the circuit as open, resetting the half-open time.
 func (c *Circuit) reopen() {
-	c.openedAt.Store(time.Now().UnixMicro())
+	c.openedAt.Store(nowNanos())
 }
 
 // close closes the circuit.
 func (c *Circuit) close() {
 	c.openedAt.Store(0)
+}
+
+// start is captured once at package load so the circuit and breakers can measure elapsed time using the monotonic
+// clock, making time-based state transitions immune to wall-clock jumps (e.g. NTP steps). Timestamps derived from it
+// (e.g. [Circuit.openedAt]) are stored as monotonic nanoseconds since start and are not wall-clock meaningful.
+var start = time.Now()
+
+// nowNanos returns the monotonic nanoseconds elapsed since package load. It is always > 0 for any real call (start is
+// captured before any circuit can be used), so 0 remains usable as an "unset"/closed sentinel.
+func nowNanos() int64 {
+	return int64(time.Since(start))
+}
+
+// sinceNanos returns the duration elapsed since the given monotonic-nanos timestamp (as produced by [nowNanos]).
+// A zero timestamp is treated as "unset" and yields a zero duration.
+func sinceNanos(nanos int64) time.Duration {
+	if nanos == 0 {
+		return 0
+	}
+	return time.Since(start) - time.Duration(nanos)
 }
 
 // ObserverForCall returns an [Observer] for the incoming call.
