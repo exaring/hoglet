@@ -193,8 +193,8 @@ func TestHoglet_Do(t *testing.T) {
 			require.NoError(t, err)
 			for i, call := range tt.calls {
 				if call.halfOpen {
-					// simulate passage of time
-					h.openedAt.Store(int64(time.Now().Add(-h.halfOpenDelay).UnixMicro()))
+					// simulate passage of time: mark the circuit as opened halfOpenDelay ago
+					h.openedAt.Store(nowNanos() - int64(h.halfOpenDelay))
 				}
 
 				var err error
