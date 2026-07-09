@@ -200,6 +200,31 @@ func TestBreaker_Observe_State(t *testing.T) {
 	}
 }
 
+func TestSlidingWindowBreaker_window_start_is_stable_within_window(t *testing.T) {
+	b := NewSlidingWindowBreaker(time.Minute, 0.5)
+
+	b.observe(false, false) // first observation initializes the window
+	windowStart := b.currentStart.Load()
+	assert.NotZero(t, windowStart)
+
+	b.observe(false, false)
+	b.observe(false, true)
+	assert.Equal(t, windowStart, b.currentStart.Load(), "observations within the window must not move its start")
+}
+
+func TestSlidingWindowBreaker_rotates_windows_after_windowSize(t *testing.T) {
+	b := NewSlidingWindowBreaker(time.Minute, 0.5)
+
+	assert.Equal(t, stateChangeOpen, b.observe(false, true))
+
+	// simulate passage of time: pretend the current window started more than a windowSize ago
+	b.currentStart.Store(nowNanos() - int64(b.windowSize+time.Second))
+
+	b.observe(false, false)
+	assert.EqualValues(t, 1, b.lastFailureCount.Load(), "failures should have been rotated into the last window")
+	assert.EqualValues(t, 0, b.currentFailureCount.Load())
+}
+
 // ignoreNone is a small helper to skip the "none" state change and only record the last "effective" state change.
 func ignoreNone(old, new stateChange) stateChange {
 	if new == stateChangeNone {

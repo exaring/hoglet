@@ -187,11 +187,11 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 
 	currentStartNanos := s.currentStart.Load()
 	sinceStart := sinceNanos(currentStartNanos)
-	firstCallInNewWindow := s.currentStart.CompareAndSwap(currentStartNanos, nowNanos())
 
-	// The second condition ensures only one goroutine can swap the windows. Necessary since multiple swaps would
-	// overwrite the last counts to some near zero value.
-	if sinceStart > s.windowSize && firstCallInNewWindow {
+	// Rotate the windows once the current one has passed (or initialize it on the very first observation). The
+	// CompareAndSwap ensures only one goroutine swaps the windows; multiple swaps would overwrite the last counts to
+	// some near zero value.
+	if (currentStartNanos == 0 || sinceStart > s.windowSize) && s.currentStart.CompareAndSwap(currentStartNanos, nowNanos()) {
 		sinceStart = 0
 		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
 		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
