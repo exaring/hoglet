@@ -167,10 +167,12 @@ func (c *Circuit) close() {
 // start is captured once at package load so the circuit and breakers can measure elapsed time using the monotonic
 // clock, making time-based state transitions immune to wall-clock jumps (e.g. NTP steps). Timestamps derived from it
 // (e.g. [Circuit.openedAt]) are stored as monotonic nanoseconds since start and are not wall-clock meaningful.
-var start = time.Now()
+// It is backdated by one nanosecond so [nowNanos] is always > 0, even if called within the same clock tick on
+// platforms with coarse timer resolution.
+var start = time.Now().Add(-time.Nanosecond)
 
-// nowNanos returns the monotonic nanoseconds elapsed since package load. It is always > 0 for any real call (start is
-// captured before any circuit can be used), so 0 remains usable as an "unset"/closed sentinel.
+// nowNanos returns the monotonic nanoseconds elapsed since package load. It is always > 0, so 0 remains usable as an
+// "unset"/closed sentinel.
 func nowNanos() int64 {
 	return int64(time.Since(start))
 }
