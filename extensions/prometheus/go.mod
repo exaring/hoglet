@@ -1,6 +1,6 @@
 module github.com/exaring/hoglet/extensions/prometheus
 
-go 1.22.0
+go 1.25.0
 
 require (
 	github.com/exaring/hoglet v0.0.0-20231028194910-dc253709e0ec
