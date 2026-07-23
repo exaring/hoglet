@@ -16,17 +16,21 @@ const (
 )
 
 // NewCollector returns a [hoglet.BreakerMiddleware] that exposes prometheus metrics for the circuit.
-// It implements prometheus.Collector and can therefore be registered with a prometheus.Registerer.
+// It implements [prometheus.Collector] and can therefore be registered with a [prometheus.Registerer].
 //
 // ⚠️ Note: the provided name must be unique across all hoglet instances ultimately registered to the same
-// prometheus.Registerer.
+// [prometheus.Registerer].
 func NewCollector(circuitName string) *Middleware {
 	callDurations := prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "call_durations_seconds",
-			Help:      "Call durations in seconds",
+			Namespace:                       namespace,
+			Subsystem:                       subsystem,
+			Name:                            "call_durations_seconds",
+			Help:                            "Call durations in seconds",
+			Buckets:                         prometheus.DefBuckets,
+			NativeHistogramBucketFactor:     1.1,
+			NativeHistogramMaxBucketNumber:  50,
+			NativeHistogramMinResetDuration: 1 * time.Hour,
 			ConstLabels: prometheus.Labels{
 				"circuit": circuitName,
 			},
@@ -120,7 +124,7 @@ func errToCause(err error) string {
 	case hoglet.ErrConcurrencyLimitReached:
 		return "concurrency_limit"
 	default:
-		// leave the errors.Is check as last, since it carries a performance penalty
+		// leave the [errors.Is] check as last, since it carries a performance penalty
 		if errors.Is(err, context.Canceled) {
 			return "context_canceled"
 		} else if errors.Is(err, context.DeadlineExceeded) {
