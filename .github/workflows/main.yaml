@@ -8,8 +8,8 @@ jobs:
         go: [ '1.25', '1.24' ]
     name: go ${{ matrix.go }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
       - run: go list -m | xargs go test -race -v
