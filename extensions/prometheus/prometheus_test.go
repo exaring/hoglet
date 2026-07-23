@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/exaring/hoglet"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,4 +121,47 @@ func TestWithPrometheusMetrics(t *testing.T) {
 	if err := testutil.CollectAndCompare(m, strings.NewReader(durationsOut1)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestNativeHistogram verifies the native-histogram side of the call-duration
+// metric. Native histograms are only carried in the protobuf exposition format,
+// so they are invisible to the text-based testutil.CollectAndCompare used above;
+// we have to inspect the dto.Metric directly to assert the native buckets exist.
+func TestNativeHistogram(t *testing.T) {
+	m := NewCollector("test")
+	of, err := m.Wrap(&mockObserverFactory{})
+	require.NoError(t, err)
+
+	mt := &mockTimesource{time.Now()}
+	of.(*wrappedMiddleware).timesource = mt
+
+	o, err := of.ObserverForCall(context.Background(), hoglet.StateClosed)
+	require.NoError(t, err)
+
+	mt.t = mt.t.Add(time.Second) // observe a 1s call duration
+	o.Observe(true)
+
+	ch := make(chan prometheus.Metric, 4)
+	m.callDurations.Collect(ch)
+	close(ch)
+
+	var found bool
+	for metric := range ch {
+		var d dto.Metric
+		require.NoError(t, metric.Write(&d))
+		h := d.GetHistogram()
+
+		require.Equal(t, uint64(1), h.GetSampleCount())
+		require.InDelta(t, 1.0, h.GetSampleSum(), 1e-9)
+
+		// Native-histogram assertions: a nonzero schema means dynamic buckets
+		// are active (bucket factor 1.1 → schema 3), and the single 1s sample
+		// must land in exactly one positive span/delta.
+		require.Equal(t, int32(3), h.GetSchema(), "native bucket factor should resolve to schema 3")
+		require.NotEmpty(t, h.GetPositiveSpan(), "1s observation must populate a positive native bucket")
+		require.Equal(t, []int64{1}, h.GetPositiveDelta())
+
+		found = true
+	}
+	require.True(t, found, "no call_durations metric was collected")
 }
