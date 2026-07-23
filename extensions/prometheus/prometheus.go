@@ -90,14 +90,12 @@ func (m Middleware) Wrap(of hoglet.ObserverFactory) (hoglet.ObserverFactory, err
 	return &wrappedMiddleware{
 		Middleware: m,
 		next:       of,
-		timesource: wallclock{},
 	}, nil
 }
 
 type wrappedMiddleware struct {
 	Middleware
-	next       hoglet.ObserverFactory
-	timesource timesource
+	next hoglet.ObserverFactory
 }
 
 func (wm *wrappedMiddleware) ObserverForCall(ctx context.Context, state hoglet.State) (hoglet.Observer, error) {
@@ -106,11 +104,11 @@ func (wm *wrappedMiddleware) ObserverForCall(ctx context.Context, state hoglet.S
 		wm.droppedCalls.WithLabelValues(errToCause(err)).Inc()
 		return nil, err
 	}
-	start := wm.timesource.Now()
+	start := time.Now()
 	wm.inflightCalls.Inc()
 	return hoglet.ObserverFunc(func(b bool) {
 		// invert failure → success to make the metric more intuitive
-		wm.callDurations.WithLabelValues(strconv.FormatBool(!b)).Observe(wm.timesource.Since(start).Seconds())
+		wm.callDurations.WithLabelValues(strconv.FormatBool(!b)).Observe(time.Since(start).Seconds())
 		wm.inflightCalls.Dec()
 		o.Observe(b)
 	}), nil
@@ -132,20 +130,4 @@ func errToCause(err error) string {
 		}
 		return "other"
 	}
-}
-
-type timesource interface {
-	Now() time.Time
-	Since(time.Time) time.Duration
-}
-
-// wallclock wraps time.Now/time.Since to allow mocking
-type wallclock struct{}
-
-func (wallclock) Now() time.Time {
-	return time.Now()
-}
-
-func (wallclock) Since(t time.Time) time.Duration {
-	return time.Since(t)
 }

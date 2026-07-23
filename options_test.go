@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/exaring/hoglet"
@@ -19,21 +20,23 @@ func TestWithHalfOpenDelay(t *testing.T) {
 		"slidingWindow": hoglet.NewSlidingWindowBreaker(time.Second, 0.1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			halfOpenDelay := 500 * time.Millisecond
-			sentinelErr := errors.New("foo")
-			cb, err := hoglet.NewCircuit(b, hoglet.WithHalfOpenDelay(halfOpenDelay))
-			require.NoError(t, err)
+			synctest.Test(t, func(t *testing.T) {
+				halfOpenDelay := 500 * time.Millisecond
+				sentinelErr := errors.New("foo")
+				cb, err := hoglet.NewCircuit(b, hoglet.WithHalfOpenDelay(halfOpenDelay))
+				require.NoError(t, err)
 
-			_, err = hoglet.Wrap(cb, noop)(context.Background(), sentinelErr)
-			require.ErrorIs(t, err, sentinelErr)
+				_, err = hoglet.Wrap(cb, noop)(context.Background(), sentinelErr)
+				require.ErrorIs(t, err, sentinelErr)
 
-			_, err = hoglet.Wrap(cb, noop)(context.Background(), nil)
-			assert.Error(t, err, "expected circuit breaker to be open, but it's not")
+				_, err = hoglet.Wrap(cb, noop)(context.Background(), nil)
+				assert.Error(t, err, "expected circuit breaker to be open, but it's not")
 
-			time.Sleep(halfOpenDelay)
+				time.Sleep(halfOpenDelay)
 
-			_, err = hoglet.Wrap(cb, noop)(context.Background(), nil)
-			assert.NoError(t, err, "expected circuit breaker to be closed again, but it's not")
+				_, err = hoglet.Wrap(cb, noop)(context.Background(), nil)
+				assert.NoError(t, err, "expected circuit breaker to be closed again, but it's not")
+			})
 		})
 	}
 }
