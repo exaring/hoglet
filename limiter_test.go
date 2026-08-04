@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/exaring/hoglet"
@@ -22,7 +23,12 @@ func (mo mockPanickingObservable) Observe(shouldPanic bool) {
 
 type mockObserverFactory struct{}
 
-func (mof mockObserverFactory) ObserverForCall(ctx context.Context, state hoglet.State) (hoglet.Observer, error) {
+func (mof mockObserverFactory) ObserverForCall(_ context.Context, state hoglet.State) (hoglet.Observer, error) {
+	// abuse the state argument to control the result of the call, standing in for a [hoglet.Circuit] rejecting calls
+	// while open
+	if state == hoglet.StateOpen {
+		return nil, hoglet.ErrCircuitOpen
+	}
 	return &mockPanickingObservable{}, nil
 }
 
@@ -124,6 +130,56 @@ func Test_ConcurrencyLimiter(t *testing.T) {
 			if tt.wantErr == nil {
 				assert.NotNil(t, o)
 			}
+		})
+	}
+}
+
+// Test_ConcurrencyLimiter_ReleasesOnInnerError ensures the limiter releases its permit when the inner factory rejects
+// the call. A leak there is terminal: the limiter sits outside the circuit's state check, so calls dropped while the
+// circuit is open would drain the permits until nothing can reach the circuit to ever close it again.
+func Test_ConcurrencyLimiter_ReleasesOnInnerError(t *testing.T) {
+	tests := []struct {
+		name  string
+		block bool
+	}{
+		{name: "non-blocking", block: false},
+		{name: "blocking", block: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const limit = 2
+
+				of, err := hoglet.ConcurrencyLimiter(limit, tt.block).Wrap(mockObserverFactory{})
+				require.NoError(t, err)
+
+				// Every acquisition is bounded, so the blocking variant fails instead of hanging on a leaked permit.
+				// Costs no wall-clock time under synctest.
+				call := func(state hoglet.State) (hoglet.Observer, error) {
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					defer cancel()
+
+					return of.ObserverForCall(ctx, state)
+				}
+
+				// One more dropped call than there are permits: had they leaked, the last one would be rejected by the
+				// limiter instead of the circuit.
+				for i := range limit + 1 {
+					o, err := call(hoglet.StateOpen)
+					require.ErrorIs(t, err, hoglet.ErrCircuitOpen, "call %d", i)
+					assert.Nil(t, o) // nothing is handed back that could release the permit for us
+				}
+
+				// The circuit closes again: every permit must still be available.
+				for i := range limit {
+					_, err := call(hoglet.StateClosed)
+					require.NoError(t, err, "call %d after recovery: permit leaked while circuit was open", i)
+				}
+
+				// The limit is still enforced, i.e. we did not release more than we held.
+				_, err = call(hoglet.StateClosed)
+				assert.Error(t, err, "limit should be reached with all %d permits held", limit)
+			})
 		})
 	}
 }

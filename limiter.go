@@ -29,6 +29,9 @@ func ConcurrencyLimiter(limit int64, block bool) BreakerMiddleware {
 	})
 }
 
+// concurrencyLimiter holds the shared state of both limiter variants. Both acquire a permit before delegating to its
+// [concurrencyLimiter.ObserverForCall], which is therefore responsible for releasing it again — including when the
+// inner factory rejects the call.
 type concurrencyLimiter struct {
 	sem  *semaphore.Weighted
 	next ObserverFactory
@@ -37,6 +40,11 @@ type concurrencyLimiter struct {
 func (cl concurrencyLimiter) ObserverForCall(ctx context.Context, state State) (Observer, error) {
 	o, err := cl.next.ObserverForCall(ctx, state)
 	if err != nil {
+		// No [Observer] is returned on error, so release here or never.
+		// Leaking a permit here is terminal: the limiter sits outside the circuit's state
+		// check, so every call dropped while the circuit is open would permanently shrink the
+		// effective limit until no call can reach the circuit to ever close it again.
+		cl.sem.Release(1)
 		return nil, err
 	}
 	return ObserverFunc(func(b bool) {
