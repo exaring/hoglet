@@ -49,6 +49,9 @@ type Breaker interface {
 type ObserverFactory interface {
 	// ObserverForCall returns an [Observer] for the incoming call.
 	// It is called with the current [State] of the circuit, before calling the wrapped function.
+	//
+	// An error rejects the call. No [Observer] is returned in that case, so anything the factory claimed for the
+	// call must be released before returning: nothing else will.
 	ObserverForCall(context.Context, State) (Observer, error)
 }
 
