@@ -16,6 +16,10 @@ import (
 type Circuit struct {
 	options
 
+	// closedObserver and halfOpenObserver are handed out to every call admitted in the respective state. A
+	// [stateObserver] is immutable, so sharing them saves boxing one into an [Observer] per call.
+	closedObserver, halfOpenObserver Observer
+
 	// State
 
 	openedAt atomic.Int64 // monotonic nanoseconds since start (see [nowNanos]); 0 = closed
@@ -89,6 +93,8 @@ func (d *dedupedObserver) Observe(failure bool) {
 // A [Circuit] with a nil breaker is a noop and will never open for any of its wrapped functions.
 func NewCircuit(breaker Breaker, opts ...Option) (*Circuit, error) {
 	c := &Circuit{}
+	c.closedObserver = stateObserver{circuit: c, state: StateClosed}
+	c.halfOpenObserver = stateObserver{circuit: c, state: StateHalfOpen}
 
 	o := options{
 		isFailure: defaultFailureCondition,
@@ -206,13 +212,14 @@ func sinceNanos(nanos int64) time.Duration {
 //
 // It implements [ObserverFactory], so that the [Circuit] can act as the base for [BreakerMiddleware].
 func (c *Circuit) ObserverForCall(_ context.Context, state State) (Observer, error) {
-	if state == StateOpen {
+	switch state {
+	case StateClosed:
+		return c.closedObserver, nil
+	case StateHalfOpen:
+		return c.halfOpenObserver, nil
+	default: // StateOpen
 		return nil, ErrCircuitOpen
 	}
-	return stateObserver{
-		circuit: c,
-		state:   state,
-	}, nil
 }
 
 type stateObserver struct {
