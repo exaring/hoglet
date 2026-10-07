@@ -299,11 +299,15 @@ func (c *Circuit) observeCtx(obs Observer, ctx context.Context) {
 	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
 	<-ctx.Done()
 
-	err := ctx.Err()
 	if context.Cause(ctx) == errWrappedFunctionDone {
-		err = nil // ignore internal cancellations; the wrapped function returned already
+		return // internal cancellation: the wrapped function returned already and is observed by its caller
 	}
-	obs.Observe(err != nil && c.isFailure(err))
+
+	// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
+	// recording a success here would mask whatever the function ends up returning.
+	if c.isFailure(ctx.Err()) {
+		obs.Observe(true)
+	}
 }
 
 // State represents the state of a circuit.
