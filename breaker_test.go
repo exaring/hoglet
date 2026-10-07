@@ -237,6 +237,30 @@ func TestSlidingWindowBreaker_rotates_windows_after_windowSize(t *testing.T) {
 	assert.EqualValues(t, 0, b.currentFailureCount.Load())
 }
 
+func TestSlidingWindowBreaker_last_window_weighs_its_remaining_overlap(t *testing.T) {
+	b := NewSlidingWindowBreaker(time.Minute, 0.4)
+
+	assert.Equal(t, stateChangeOpen, b.observe(false, true))
+
+	// simulate passage of time: the window ended half a window ago, so only half of it is still visible
+	b.currentStart.Store(nowNanos() - int64(b.windowSize*3/2))
+
+	// ~0.5 weighted failures out of ~1.5 weighted calls is below the threshold
+	assert.Equal(t, stateChangeClose, b.observe(false, false))
+}
+
+func TestSlidingWindowBreaker_drops_windows_older_than_two_windowSizes(t *testing.T) {
+	b := NewSlidingWindowBreaker(time.Minute, 0.1)
+
+	assert.Equal(t, stateChangeOpen, b.observe(false, true))
+
+	// simulate passage of time: both windows passed without observations
+	b.currentStart.Store(nowNanos() - int64(2*b.windowSize+time.Second))
+
+	assert.Equal(t, stateChangeClose, b.observe(false, false))
+	assert.EqualValues(t, 0, b.lastFailureCount.Load(), "outdated failures should have been dropped")
+}
+
 // ignoreNone is a small helper to skip the "none" state change and only record the last "effective" state change.
 func ignoreNone(old, new stateChange) stateChange {
 	if new == stateChangeNone {
