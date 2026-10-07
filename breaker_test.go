@@ -224,14 +224,15 @@ func TestSlidingWindowBreaker_window_start_is_stable_within_window(t *testing.T)
 }
 
 func TestSlidingWindowBreaker_rotates_windows_after_windowSize(t *testing.T) {
-	b := NewSlidingWindowBreaker(time.Minute, 0.5)
+	b := NewSlidingWindowBreaker(time.Minute, 0.1)
 
 	assert.Equal(t, stateChangeOpen, b.observe(false, true))
 
 	// simulate passage of time: pretend the current window started more than a windowSize ago
 	b.currentStart.Store(nowNanos() - int64(b.windowSize+time.Second))
 
-	b.observe(false, false)
+	// the failure rotated into the last window by this very observation must count towards its failure rate
+	assert.Equal(t, stateChangeOpen, b.observe(false, false))
 	assert.EqualValues(t, 1, b.lastFailureCount.Load(), "failures should have been rotated into the last window")
 	assert.EqualValues(t, 0, b.currentFailureCount.Load())
 }
