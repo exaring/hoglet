@@ -55,6 +55,12 @@ func toStore(i float64) uint64 {
 	return math.Float64bits(i)
 }
 
+// unobserved marks an [EWMABreaker] that has not seen any observation yet, so that the first sample becomes the
+// failure rate as is. Failure rates are never negative, so no amount of decay can ever produce this value: a sentinel
+// within the valid range (like the smallest subnormal float) is eventually reached by a long run of successes, after
+// which a single failure would be taken for the very first sample and open the circuit.
+var unobserved = toStore(-1)
+
 // EWMABreaker is a [Breaker] that uses an exponentially weighted moving failure rate. See [NewEWMABreaker] for details.
 //
 // A zero EWMABreaker is ready to use, but will never open.
@@ -91,7 +97,7 @@ func NewEWMABreaker(sampleCount uint, failureThreshold float64) *EWMABreaker {
 		threshold: failureThreshold,
 	}
 
-	e.failureRate.Store(toStore(math.SmallestNonzeroFloat64)) // start closed; also work around "initial value" problem
+	e.failureRate.Store(unobserved) // start closed
 
 	return e
 }
@@ -111,13 +117,19 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 		value = 1.0
 	}
 
-	// Unconditionally setting via swap and maybe overwriting is faster in the initial case.
-	failureRate := fromStore(e.failureRate.Swap(toStore(value)))
-	if failureRate == math.SmallestNonzeroFloat64 {
-		failureRate = value
-	} else {
-		failureRate = (value * e.decay) + (failureRate * (1 - e.decay))
-		e.failureRate.Store(toStore(failureRate))
+	// Load, compute and CompareAndSwap, retrying on contention. A swap-then-store would let a concurrent observer read
+	// the raw sample another one just swapped in as the previous failure rate, wiping the whole history with it.
+	var failureRate float64
+	for {
+		old := e.failureRate.Load()
+		if old == unobserved {
+			failureRate = value
+		} else {
+			failureRate = (value * e.decay) + (fromStore(old) * (1 - e.decay))
+		}
+		if e.failureRate.CompareAndSwap(old, toStore(failureRate)) {
+			break
+		}
 	}
 
 	if failureRate > e.threshold {

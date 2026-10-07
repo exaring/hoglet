@@ -2,10 +2,13 @@ package hoglet
 
 import (
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEWMABreaker_zero_value_does_not_open(t *testing.T) {
@@ -30,6 +33,47 @@ func TestEWMABreaker_sample_count_of_1_is_single_sample(t *testing.T) {
 func TestEWMABreaker_sample_count_of_0_is_rejected(t *testing.T) {
 	_, err := NewCircuit(NewEWMABreaker(0, 0.5), WithHalfOpenDelay(time.Second))
 	assert.Error(t, err, "expected a sample count of 0 to be rejected")
+}
+
+func TestEWMABreaker_single_failure_never_opens_healthy_breaker(t *testing.T) {
+	// A long healthy run decays the rate down into the subnormal floats. At no point along the way may a single
+	// failure be taken for the very first sample (i.e. a failure rate of 1): the "unobserved" sentinel must not be
+	// reachable by arithmetic.
+	b := NewEWMABreaker(3, 0.9)
+	b.observe(false, true)
+	for i := range 2000 {
+		b.observe(false, false)
+
+		probe := NewEWMABreaker(3, 0.9)
+		probe.failureRate.Store(b.failureRate.Load())
+		require.Equal(t, stateChangeClose, probe.observe(false, true), "single failure after %d successes", i+1)
+	}
+}
+
+func TestEWMABreaker_concurrent_observations_do_not_open_healthy_breaker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test")
+	}
+
+	// 1% failures against a 50% threshold: any open is spurious. Updating the rate without a CompareAndSwap lets a
+	// concurrent observer read another one's raw sample as the previous rate, wiping the history on a single failure.
+	b := NewEWMABreaker(50, 0.5)
+	var opens atomic.Int64
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(g)))
+			for range 50_000 {
+				if b.observe(false, rng.Float64() < 0.01) == stateChangeOpen {
+					opens.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Zero(t, opens.Load(), "spurious opens")
 }
 
 // testSeed is a fixed seed for the per-subtest RNG so the statistically-driven EWMA stages are deterministic and
