@@ -184,8 +184,6 @@ func NewSlidingWindowBreaker(windowSize time.Duration, failureThreshold float64)
 
 func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	var (
-		lastFailureCount    int64
-		lastSuccessCount    int64
 		currentFailureCount int64
 		currentSuccessCount int64
 	)
@@ -202,12 +200,12 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	// some near zero value.
 	if (currentStartNanos == 0 || sinceStart > s.windowSize) && s.currentStart.CompareAndSwap(currentStartNanos, nowNanos()) {
 		sinceStart = 0
-		lastFailureCount = s.lastFailureCount.Swap(s.currentFailureCount.Swap(0))
-		lastSuccessCount = s.lastSuccessCount.Swap(s.currentSuccessCount.Swap(0))
-	} else {
-		lastFailureCount = s.lastFailureCount.Load()
-		lastSuccessCount = s.lastSuccessCount.Load()
+		s.lastFailureCount.Store(s.currentFailureCount.Swap(0))
+		s.lastSuccessCount.Store(s.currentSuccessCount.Swap(0))
 	}
+
+	lastFailureCount := s.lastFailureCount.Load()
+	lastSuccessCount := s.lastSuccessCount.Load()
 
 	if failure {
 		currentFailureCount = s.currentFailureCount.Add(1)
