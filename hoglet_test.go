@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -205,6 +206,50 @@ func TestHoglet_Do(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCircuit_ignored_context_error_does_not_mask_wrapped_function_result(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithFailureCondition(IgnoreContextCanceled))
+		require.NoError(t, err)
+
+		f := Wrap(c, func(ctx context.Context, _ noopIn) (struct{}, error) {
+			synctest.Wait() // let the watchdog react to the cancellation before returning
+			return struct{}{}, errSentinel
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = f(ctx, noopInSuccess)
+		assert.ErrorIs(t, err, errSentinel)
+		assert.Equal(t, StateOpen, c.State(), "the wrapped function's failure must have been observed")
+	})
+}
+
+func TestCircuit_context_error_is_observed_before_wrapped_function_returns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute))
+		require.NoError(t, err)
+
+		release := make(chan struct{})
+		f := Wrap(c, func(ctx context.Context, _ noopIn) (struct{}, error) {
+			<-release // ignores its context, like a blocking call would
+			return struct{}{}, nil
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			cancel()
+			synctest.Wait() // let the watchdog react to the cancellation
+			assert.Equal(t, StateOpen, c.State(), "cancellation must be observed while the wrapped function still runs")
+			close(release)
+		}()
+
+		_, err = f(ctx, noopInSuccess)
+		require.NoError(t, err)
+		assert.Equal(t, StateOpen, c.State(), "the call's own success must not override the observed cancellation")
+	})
 }
 
 func TestCircuit_failure_condition_never_called_with_nil_error(t *testing.T) {
