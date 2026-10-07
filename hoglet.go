@@ -282,7 +282,7 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 				obs.Observe(true)
 				panic(err) // let the caller deal with panics
 			}
-			obs.Observe(err != nil && c.options.isFailure(err))
+			obs.Observe(err != nil && c.isFailure(err))
 		}()
 
 		return f(ctx, in)
@@ -303,7 +303,7 @@ func (c *Circuit) observeCtx(obs Observer, ctx context.Context) {
 	if context.Cause(ctx) == errWrappedFunctionDone {
 		err = nil // ignore internal cancellations; the wrapped function returned already
 	}
-	obs.Observe(err != nil && c.options.isFailure(err))
+	obs.Observe(err != nil && c.isFailure(err))
 }
 
 // State represents the state of a circuit.
