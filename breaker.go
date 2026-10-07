@@ -169,6 +169,7 @@ type SlidingWindowBreaker struct {
 // rejected by [NewCircuit].
 // If halfOpenDelay is smaller than windowSize, the errors observed in the last window will still count proportionally in
 // half-open state, which will lead to faster re-opening on errors.
+// A successful call in half-open state clears both windows, so the circuit closes on a clean slate.
 //
 // The windowSize is the time interval over which to calculate the failure rate.
 //
@@ -189,6 +190,10 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	)
 
 	if !failure && halfOpen {
+		// Close on a clean slate: failures from before the circuit opened would otherwise reopen it on the next
+		// observation, delaying recovery until they age out of the window. An unset window start makes the next
+		// observation start afresh, like on a new breaker.
+		s.currentStart.Store(0)
 		return stateChangeClose
 	}
 

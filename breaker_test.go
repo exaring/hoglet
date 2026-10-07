@@ -145,7 +145,8 @@ func TestBreaker_Observe_State(t *testing.T) {
 			},
 		},
 		{
-			name: "single success at half-open enough to close",
+			// failures from before the circuit opened must not reopen it right after a successful half-open call
+			name: "single success at half-open enough to close for good",
 			breakers: map[string]Breaker{
 				"ewma":          NewEWMABreaker(50, 0.1),
 				"slidingwindow": NewSlidingWindowBreaker(10*time.Second, 0.1),
@@ -153,6 +154,7 @@ func TestBreaker_Observe_State(t *testing.T) {
 			stages: []stages{
 				{calls: 100, failureFunc: alwaysFailure, wantStateChange: stateChangeOpen},
 				{calls: 1, failureFunc: alwaysSuccessful, waitForHalfOpen: true, wantStateChange: stateChangeClose},
+				{calls: 10, failureFunc: alwaysSuccessful, wantStateChange: stateChangeClose},
 			},
 		},
 		{
