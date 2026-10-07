@@ -225,6 +225,7 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 		}
 
 		if s.currentStart.CompareAndSwap(currentStartNanos, newStartNanos) {
+			currentStartNanos = newStartNanos
 			sinceStart = sinceNanos(newStartNanos)
 			lastFailures, lastSuccesses := s.currentFailureCount.Swap(0), s.currentSuccessCount.Swap(0)
 			if outdated {
@@ -244,6 +245,14 @@ func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
 	} else {
 		currentSuccessCount = s.currentSuccessCount.Add(1)
 		currentFailureCount = s.currentFailureCount.Load()
+	}
+
+	// Another goroutine may have rotated the windows since the start was loaded (also by winning the rotation above).
+	// The sample is counted either way, but the counts and elapsed time gathered so far may then belong to different
+	// windows: e.g. the last window weighs nothing against the stale start, and the sample alone is judged over the
+	// near-empty new window, where a single failure is a failure rate of 1. Leave the decision to the next observation.
+	if s.currentStart.Load() != currentStartNanos {
+		return stateChangeNone
 	}
 
 	// We use the last window's weight to determine how much the last window's failure rate should count.

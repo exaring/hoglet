@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -305,6 +306,36 @@ func TestSlidingWindowBreaker_drops_windows_older_than_two_windowSizes(t *testin
 
 	assert.Equal(t, stateChangeClose, b.observe(false, false))
 	assert.EqualValues(t, 0, b.lastFailureCount.Load(), "outdated failures should have been dropped")
+}
+
+func TestSlidingWindowBreaker_concurrent_rotation_weighs_last_window(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const goroutines = 8
+		b := NewSlidingWindowBreaker(time.Second, 0.5)
+
+		// Every round, all goroutines observe at once right after the window has passed, so they race to rotate it.
+		// Time is frozen meanwhile, so they all measure the same elapsed time. Whoever loses the rotation must still
+		// weigh the window that just ended (healthy: one failure per round), or its own failure alone is judged over
+		// the fresh window, i.e. a failure rate of 1.
+		for round := range 100 {
+			time.Sleep(time.Second + time.Microsecond)
+
+			start := make(chan struct{})
+			results := make(chan stateChange, goroutines)
+			for g := range goroutines {
+				go func() {
+					<-start
+					// round 0 only warms up the window, since nothing precedes the very first one
+					results <- b.observe(false, round > 0 && g == round%goroutines)
+				}()
+			}
+			close(start)
+
+			for range goroutines {
+				assert.NotEqual(t, stateChangeOpen, <-results, "round %d", round)
+			}
+		}
+	})
 }
 
 // ignoreNone is a small helper to skip the "none" state change and only record the last "effective" state change.
