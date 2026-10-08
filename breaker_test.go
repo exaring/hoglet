@@ -260,12 +260,12 @@ func TestSlidingWindowBreaker_window_start_is_stable_within_window(t *testing.T)
 	b := NewSlidingWindowBreaker(time.Minute, 0.5)
 
 	b.observe(false, false) // first observation initializes the window
-	windowStart := b.currentStart.Load()
-	assert.NotZero(t, windowStart)
+	window := b.window.Load()
+	require.NotNil(t, window)
 
 	b.observe(false, false)
 	b.observe(false, true)
-	assert.Equal(t, windowStart, b.currentStart.Load(), "observations within the window must not move its start")
+	assert.Same(t, window, b.window.Load(), "observations within the window must not replace it")
 }
 
 func TestSlidingWindowBreaker_rotation_weighs_last_window_by_its_remaining_overlap(t *testing.T) {
@@ -286,15 +286,17 @@ func TestSlidingWindowBreaker_rotation_weighs_last_window_by_its_remaining_overl
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := NewSlidingWindowBreaker(windowSize, tt.threshold)
-			require.Equal(t, stateChangeOpen, b.observe(false, true))
+			synctest.Test(t, func(t *testing.T) {
+				b := NewSlidingWindowBreaker(windowSize, tt.threshold)
+				require.Equal(t, stateChangeOpen, b.observe(false, true))
 
-			// simulate passage of time
-			b.currentStart.Store(nowNanos() - int64(tt.windowAge))
+				time.Sleep(tt.windowAge)
 
-			assert.Equal(t, tt.want, b.observe(false, false))
-			assert.Equal(t, tt.wantLastFailures, b.lastFailureCount.Load())
-			assert.Zero(t, b.currentFailureCount.Load())
+				assert.Equal(t, tt.want, b.observe(false, false))
+				w := b.window.Load()
+				assert.Equal(t, tt.wantLastFailures, w.lastFailures)
+				assert.Zero(t, w.failures.Load())
+			})
 		})
 	}
 }

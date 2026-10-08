@@ -164,11 +164,16 @@ type SlidingWindowBreaker struct {
 
 	// State
 
-	currentStart        atomic.Int64 // monotonic nanoseconds since start (see nowNanos)
-	currentSuccessCount atomic.Int64
-	currentFailureCount atomic.Int64
-	lastSuccessCount    atomic.Int64
-	lastFailureCount    atomic.Int64
+	window atomic.Pointer[slidingWindow] // nil before the first observation and after a successful half-open call
+}
+
+// slidingWindow is the current window together with the counts of the one before it. Rotating replaces it as a whole,
+// so every observation reads both windows and the elapsed time consistently.
+type slidingWindow struct {
+	start                       int64 // monotonic nanoseconds since start (see nowNanos)
+	lastFailures, lastSuccesses int64
+
+	failures, successes atomic.Int64
 }
 
 // NewSlidingWindowBreaker creates a new [SlidingWindowBreaker] with the given window size and failure rate threshold.
@@ -195,77 +200,77 @@ func NewSlidingWindowBreaker(windowSize time.Duration, failureThreshold float64)
 }
 
 func (s *SlidingWindowBreaker) observe(halfOpen, failure bool) stateChange {
-	var (
-		currentFailureCount int64
-		currentSuccessCount int64
-	)
-
 	if !failure && halfOpen {
 		// Close on a clean slate: failures from before the circuit opened would otherwise reopen it on the next
-		// observation, delaying recovery until they age out of the window. An unset window start makes the next
-		// observation start afresh, like on a new breaker.
-		s.currentStart.Store(0)
+		// observation, delaying recovery until they age out of the window. Without a window, the next observation
+		// starts afresh, like on a new breaker.
+		s.window.Store(nil)
 		return stateChangeClose
 	}
 
-	currentStartNanos := s.currentStart.Load()
-	sinceStart := sinceNanos(currentStartNanos)
-
-	// Rotate the windows once the current one has passed (or initialize it on the very first observation). The
-	// CompareAndSwap ensures only one goroutine swaps the windows; multiple swaps would overwrite the last counts to
-	// some near zero value.
-	if currentStartNanos == 0 || sinceStart > s.windowSize {
-		// The new window starts where the current one ended, so the last window is weighed by how much of it is
-		// actually still visible. If a whole window passed in between, both windows are outdated: start afresh.
-		newStartNanos := currentStartNanos + int64(s.windowSize)
-		outdated := currentStartNanos == 0 || sinceStart > 2*s.windowSize
-		if outdated {
-			newStartNanos = nowNanos()
-		}
-
-		if s.currentStart.CompareAndSwap(currentStartNanos, newStartNanos) {
-			currentStartNanos = newStartNanos
-			sinceStart = sinceNanos(newStartNanos)
-			lastFailures, lastSuccesses := s.currentFailureCount.Swap(0), s.currentSuccessCount.Swap(0)
-			if outdated {
-				lastFailures, lastSuccesses = 0, 0
-			}
-			s.lastFailureCount.Store(lastFailures)
-			s.lastSuccessCount.Store(lastSuccesses)
-		}
+	w := s.window.Load()
+	var sinceStart time.Duration
+	if w != nil {
+		sinceStart = sinceNanos(w.start)
+	}
+	if w == nil || sinceStart > s.windowSize {
+		w, sinceStart = s.rotate()
 	}
 
-	lastFailureCount := s.lastFailureCount.Load()
-	lastSuccessCount := s.lastSuccessCount.Load()
-
+	var failures, successes int64
 	if failure {
-		currentFailureCount = s.currentFailureCount.Add(1)
-		currentSuccessCount = s.currentSuccessCount.Load()
+		failures = w.failures.Add(1)
+		successes = w.successes.Load()
 	} else {
-		currentSuccessCount = s.currentSuccessCount.Add(1)
-		currentFailureCount = s.currentFailureCount.Load()
-	}
-
-	// Another goroutine may have rotated the windows since the start was loaded (also by winning the rotation above).
-	// The sample is counted either way, but the counts and elapsed time gathered so far may then belong to different
-	// windows: e.g. the last window weighs nothing against the stale start, and the sample alone is judged over the
-	// near-empty new window, where a single failure is a failure rate of 1. Leave the decision to the next observation.
-	if s.currentStart.Load() != currentStartNanos {
-		return stateChangeNone
+		successes = w.successes.Add(1)
+		failures = w.failures.Load()
 	}
 
 	// We use the last window's weight to determine how much the last window's failure rate should count.
 	// It is the remaining portion of the last window still "visible" in the current window.
 	lastWindowWeight := max(0, s.windowSize.Seconds()-sinceStart.Seconds()) / s.windowSize.Seconds()
 
-	weightedFailures := float64(lastFailureCount)*lastWindowWeight + float64(currentFailureCount)
-	weightedTotal := float64(lastFailureCount+lastSuccessCount)*lastWindowWeight + float64(currentFailureCount+currentSuccessCount)
+	weightedFailures := float64(w.lastFailures)*lastWindowWeight + float64(failures)
+	weightedTotal := float64(w.lastFailures+w.lastSuccesses)*lastWindowWeight + float64(failures+successes)
 	failureRate := weightedFailures / weightedTotal
 
 	if failureRate > s.threshold {
 		return stateChangeOpen
 	} else {
 		return stateChangeClose
+	}
+}
+
+// rotate replaces the current window once it has passed (or creates the first one) and returns the window that is
+// current afterwards, along with the time elapsed since it started. It is kept out of line, since the hot path in
+// [SlidingWindowBreaker.observe] only needs it once per window.
+func (s *SlidingWindowBreaker) rotate() (*slidingWindow, time.Duration) {
+	for {
+		w := s.window.Load()
+		var sinceStart time.Duration
+		if w != nil {
+			sinceStart = sinceNanos(w.start)
+			if sinceStart <= s.windowSize {
+				return w, sinceStart
+			}
+		}
+
+		// The new window starts where the current one ended, so the last window is weighed by how much of it is
+		// actually still visible. If a whole window passed in between, both windows are outdated: start afresh.
+		// Samples still being added to the current window after its counts are read here are lost, which only
+		// affects calls racing the rotation.
+		next := &slidingWindow{}
+		if w != nil && sinceStart <= 2*s.windowSize {
+			next.start = w.start + int64(s.windowSize)
+			next.lastFailures, next.lastSuccesses = w.failures.Load(), w.successes.Load()
+		} else {
+			next.start = nowNanos()
+		}
+
+		// Only one goroutine gets to rotate; the others start over with its window.
+		if s.window.CompareAndSwap(w, next) {
+			return next, sinceNanos(next.start)
+		}
 	}
 }
 
