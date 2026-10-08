@@ -55,10 +55,8 @@ func toStore(i float64) uint64 {
 	return math.Float64bits(i)
 }
 
-// unobserved marks an [EWMABreaker] that has not seen any observation yet, so that the first sample becomes the
-// failure rate as is. Failure rates are never negative, so no amount of decay can ever produce this value: a sentinel
-// within the valid range (like the smallest subnormal float) is eventually reached by a long run of successes, after
-// which a single failure would be taken for the very first sample and open the circuit.
+// unobserved marks an [EWMABreaker] without observations, so its first sample becomes the failure rate as is. It is
+// negative, so no decayed failure rate can ever reach it.
 var unobserved = toStore(-1)
 
 // EWMABreaker is a [Breaker] that uses an exponentially weighted moving failure rate. See [NewEWMABreaker] for details.
