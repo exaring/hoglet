@@ -117,8 +117,9 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 		value = 1.0
 	}
 
-	// Load, compute and CompareAndSwap, retrying on contention. A swap-then-store would let a concurrent observer read
-	// the raw sample another one just swapped in as the previous failure rate, wiping the whole history with it.
+	// Load, compute and CompareAndSwap, retrying on contention, so a concurrent observer never takes another one's raw
+	// sample for the previous failure rate. A healthy rate settles on a fixed point: skipping the store of an unchanged
+	// value keeps the hot path from contending on the cache line.
 	var failureRate float64
 	for {
 		old := e.failureRate.Load()
@@ -127,7 +128,7 @@ func (e *EWMABreaker) observe(halfOpen, failure bool) stateChange {
 		} else {
 			failureRate = (value * e.decay) + (fromStore(old) * (1 - e.decay))
 		}
-		if e.failureRate.CompareAndSwap(old, toStore(failureRate)) {
+		if updated := toStore(failureRate); updated == old || e.failureRate.CompareAndSwap(old, updated) {
 			break
 		}
 	}
