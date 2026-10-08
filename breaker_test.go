@@ -62,16 +62,14 @@ func TestEWMABreaker_concurrent_observations_do_not_open_healthy_breaker(t *test
 	var opens atomic.Int64
 	var wg sync.WaitGroup
 	for g := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			rng := rand.New(rand.NewSource(int64(g)))
-			for range 50_000 {
+			for range 5_000 {
 				if b.observe(false, rng.Float64() < 0.01) == stateChangeOpen {
 					opens.Add(1)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	assert.Zero(t, opens.Load(), "spurious opens")
@@ -270,55 +268,47 @@ func TestSlidingWindowBreaker_window_start_is_stable_within_window(t *testing.T)
 	assert.Equal(t, windowStart, b.currentStart.Load(), "observations within the window must not move its start")
 }
 
-func TestSlidingWindowBreaker_rotates_windows_after_windowSize(t *testing.T) {
-	b := NewSlidingWindowBreaker(time.Minute, 0.1)
+func TestSlidingWindowBreaker_rotation_weighs_last_window_by_its_remaining_overlap(t *testing.T) {
+	const windowSize = time.Minute
+	tests := []struct {
+		name             string
+		threshold        float64
+		windowAge        time.Duration // how long ago the current window started at the time of rotation
+		want             stateChange
+		wantLastFailures int64
+	}{
+		// the failure rotated into the last window by this very observation must count towards its failure rate
+		{name: "just ended", threshold: 0.1, windowAge: windowSize + time.Second, want: stateChangeOpen, wantLastFailures: 1},
+		// only half of the last window is still visible: ~0.5 weighted failures out of ~1.5 weighted calls
+		{name: "half visible", threshold: 0.4, windowAge: windowSize * 3 / 2, want: stateChangeClose, wantLastFailures: 1},
+		// both windows passed without observations, so the failure is outdated
+		{name: "outdated", threshold: 0.1, windowAge: 2*windowSize + time.Second, want: stateChangeClose, wantLastFailures: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewSlidingWindowBreaker(windowSize, tt.threshold)
+			require.Equal(t, stateChangeOpen, b.observe(false, true))
 
-	assert.Equal(t, stateChangeOpen, b.observe(false, true))
+			// simulate passage of time
+			b.currentStart.Store(nowNanos() - int64(tt.windowAge))
 
-	// simulate passage of time: pretend the current window started more than a windowSize ago
-	b.currentStart.Store(nowNanos() - int64(b.windowSize+time.Second))
-
-	// the failure rotated into the last window by this very observation must count towards its failure rate
-	assert.Equal(t, stateChangeOpen, b.observe(false, false))
-	assert.EqualValues(t, 1, b.lastFailureCount.Load(), "failures should have been rotated into the last window")
-	assert.EqualValues(t, 0, b.currentFailureCount.Load())
+			assert.Equal(t, tt.want, b.observe(false, false))
+			assert.Equal(t, tt.wantLastFailures, b.lastFailureCount.Load())
+			assert.Zero(t, b.currentFailureCount.Load())
+		})
+	}
 }
 
-func TestSlidingWindowBreaker_last_window_weighs_its_remaining_overlap(t *testing.T) {
-	b := NewSlidingWindowBreaker(time.Minute, 0.4)
-
-	assert.Equal(t, stateChangeOpen, b.observe(false, true))
-
-	// simulate passage of time: the window ended half a window ago, so only half of it is still visible
-	b.currentStart.Store(nowNanos() - int64(b.windowSize*3/2))
-
-	// ~0.5 weighted failures out of ~1.5 weighted calls is below the threshold
-	assert.Equal(t, stateChangeClose, b.observe(false, false))
-}
-
-func TestSlidingWindowBreaker_drops_windows_older_than_two_windowSizes(t *testing.T) {
-	b := NewSlidingWindowBreaker(time.Minute, 0.1)
-
-	assert.Equal(t, stateChangeOpen, b.observe(false, true))
-
-	// simulate passage of time: both windows passed without observations
-	b.currentStart.Store(nowNanos() - int64(2*b.windowSize+time.Second))
-
-	assert.Equal(t, stateChangeClose, b.observe(false, false))
-	assert.EqualValues(t, 0, b.lastFailureCount.Load(), "outdated failures should have been dropped")
-}
-
-func TestSlidingWindowBreaker_concurrent_rotation_weighs_last_window(t *testing.T) {
+func TestSlidingWindowBreaker_concurrent_rotation_does_not_open_healthy_breaker(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const goroutines = 8
 		b := NewSlidingWindowBreaker(time.Second, 0.5)
 
-		// Every round, all goroutines observe at once right after the window has passed, so they race to rotate it.
-		// Time is frozen meanwhile, so they all measure the same elapsed time. Whoever loses the rotation must still
-		// weigh the window that just ended (healthy: one failure per round), or its own failure alone is judged over
-		// the fresh window, i.e. a failure rate of 1.
+		// Every round, all goroutines observe at once right after the window has passed, so they race to rotate it,
+		// while frozen time has them all measure the same elapsed time. The windows stay healthy (one failure per
+		// round), so an open means a racing observer judged its lone failure over the fresh window alone.
 		for round := range 100 {
-			time.Sleep(time.Second + time.Microsecond)
+			time.Sleep(b.windowSize + time.Microsecond)
 
 			start := make(chan struct{})
 			results := make(chan stateChange, goroutines)

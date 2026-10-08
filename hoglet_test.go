@@ -213,15 +213,15 @@ func TestCircuit_ignored_context_error_does_not_mask_wrapped_function_result(t *
 		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithFailureCondition(IgnoreContextCanceled))
 		require.NoError(t, err)
 
-		f := Wrap(c, func(ctx context.Context, _ noopIn) (struct{}, error) {
+		f := Wrap(c, func(ctx context.Context, in noopIn) (struct{}, error) {
 			synctest.Wait() // let the watchdog react to the cancellation before returning
-			return struct{}{}, errSentinel
+			return noop(ctx, in)
 		})
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err = f(ctx, noopInSuccess)
+		_, err = f(ctx, noopInFailure)
 		assert.ErrorIs(t, err, errSentinel)
 		assert.Equal(t, StateOpen, c.State(), "the wrapped function's failure must have been observed")
 	})
@@ -233,9 +233,9 @@ func TestCircuit_context_error_is_observed_before_wrapped_function_returns(t *te
 		require.NoError(t, err)
 
 		release := make(chan struct{})
-		f := Wrap(c, func(ctx context.Context, _ noopIn) (struct{}, error) {
+		f := Wrap(c, func(ctx context.Context, in noopIn) (struct{}, error) {
 			<-release // ignores its context, like a blocking call would
-			return struct{}{}, nil
+			return noop(ctx, in)
 		})
 
 		ctx, cancel := context.WithCancel(context.Background())
