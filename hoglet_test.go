@@ -77,6 +77,28 @@ func BenchmarkHoglet_Do_SlidingWindow(b *testing.B) {
 	})
 }
 
+func BenchmarkHoglet_Do_SlidingWindow_rotating(b *testing.B) {
+	// Unlike the 10s window above, this one rotates thousands of times per run, so rotation costs are included.
+	const windowSize = time.Millisecond
+	noop := func(context.Context, struct{}) (out struct{}, err error) { return }
+
+	h, err := NewCircuit(NewSlidingWindowBreaker(windowSize, 0.9))
+	require.NoError(b, err)
+
+	ctx := context.Background() // b.Context() introduces some overhead
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	f := Wrap(h, noop)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = f(ctx, struct{}{})
+		}
+	})
+	b.ReportMetric(float64(b.Elapsed()/windowSize), "windows")
+}
+
 func TestBreaker_nil_breaker_does_not_open(t *testing.T) {
 	b, err := NewCircuit(nil)
 	require.NoError(t, err)
