@@ -2,7 +2,6 @@ package hoglet
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -276,20 +275,15 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 		if err != nil {
 			// Note: any errors here are not "observed" and do not count towards the breaker's failure rate.
 			// This includes:
-			// - ErrCircuitOpen
-			// - ErrConcurrencyLimit (for blocking limited circuits)
-			// - context timeouts while blocked on concurrency limit
+			// - [ErrCircuitOpen]
+			// - [ErrConcurrencyLimitReached] (for non-blocking limited circuits)
+			// - [ErrWaitingForSlot] (for blocking limited circuits: context errors while waiting for a slot)
 			// And any other errors that may be returned by optional breaker wrappers.
 			return out, err
 		}
 
-		// The watchdog goroutine exists to record a context cancellation/deadline as a failure promptly, even if the
-		// wrapped function ignores its context and blocks. If the context can never be canceled (no deadline and no
-		// cancellation, e.g. [context.Background]), the watchdog can never fire usefully, so we skip it and the
-		// associated context allocation entirely, relying solely on the deferred observation below.
-		//
-		// TODO: allow skipping the watchdog via an option for callers that guarantee their wrapped function respects
-		// its context, trading prompt cancellation detection for one less goroutine + context allocation per call.
+		// The watchdog is a callback on the context (see [Wrap] for why), so it only costs a goroutine if the context is
+		// canceled during the call. A context that can never be canceled (e.g. [context.Background]) needs none.
 		if ctx.Done() != nil {
 			// Only here can the watchdog race the deferred observe, so dedup to ensure the - potentially wrapped -
 			// observer is observed exactly once. Without a watchdog the deferred func below is the sole observer
@@ -297,10 +291,8 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			// This relies on breaker middleware observing synchronously; an async middleware observer must dedup itself.
 			obs = dedupObservableCall(obs)
 
-			obsCtx, cancel := context.WithCancelCause(ctx)
-			defer cancel(errWrappedFunctionDone)
-
-			go c.observeCtx(obs, obsCtx)
+			stop := c.watch(ctx, obs)
+			defer stop()
 		}
 
 		defer func() {
@@ -316,25 +308,16 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 	}
 }
 
-// errWrappedFunctionDone is used to distinguish between internal and external (to the lib) context cancellations.
-var errWrappedFunctionDone = errors.New("wrapped function done")
-
-// observeCtx observes the given context for cancellation and records it as a failure.
-// It assumes [Observer] is idempotent and deduplicates calls itself.
-func (c *Circuit) observeCtx(obs Observer, ctx context.Context) {
-	// We want to observe a context error as soon as possible to open the breaker, but at the same time we want to
-	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
-	<-ctx.Done()
-
-	if context.Cause(ctx) == errWrappedFunctionDone {
-		return // internal cancellation: the wrapped function returned already and is observed by its caller
-	}
-
-	// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
-	// recording a success here would mask whatever the function ends up returning.
-	if c.isFailure(ctx.Err()) {
-		obs.Observe(true)
-	}
+// watch registers the watchdog recording a context error on ctx as a failure, and returns the function unregistering
+// it. It is kept out of the generic [Wrap], where the callback would be allocated one size class bigger.
+func (c *Circuit) watch(ctx context.Context, obs Observer) (stop func() bool) {
+	return context.AfterFunc(ctx, func() {
+		// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
+		// recording a success here would mask whatever the function ends up returning.
+		if c.isFailure(ctx.Err()) {
+			obs.Observe(true)
+		}
+	})
 }
 
 // State represents the state of a circuit.

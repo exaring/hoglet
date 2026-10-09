@@ -3,6 +3,7 @@ package hoglet
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -49,6 +50,29 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 
 	f := Wrap(h, noop)
 	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = f(ctx, struct{}{})
+		}
+	})
+}
+
+func BenchmarkHoglet_Do_EWMA_cancellable(b *testing.B) {
+	// Each goroutine calls with its own cancellable context, like concurrent requests each carrying theirs, so the
+	// circuit watches it for cancellation.
+	noop := func(context.Context, struct{}) (out struct{}, err error) { return }
+	h, err := NewCircuit(
+		NewEWMABreaker(10, 0.9),
+		WithHalfOpenDelay(time.Second),
+	)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	f := Wrap(h, noop)
+	b.RunParallel(func(pb *testing.PB) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		for pb.Next() {
 			_, _ = f(ctx, struct{}{})
 		}
@@ -324,6 +348,38 @@ func TestCircuit_context_error_is_observed_before_wrapped_function_returns(t *te
 		require.NoError(t, err)
 		assert.Equal(t, StateOpen, c.State(), "the call's own success must not override the observed cancellation")
 	})
+}
+
+// watchedContext is a never canceled context counting the callbacks [context.AfterFunc] registers on it, and how many
+// of them it unregisters again.
+type watchedContext struct {
+	context.Context
+	done                chan struct{}
+	registered, stopped atomic.Int64
+}
+
+func (w *watchedContext) Done() <-chan struct{} { return w.done }
+
+// AfterFunc is used by [context.AfterFunc] instead of its own registration.
+func (w *watchedContext) AfterFunc(func()) (stop func() bool) {
+	w.registered.Add(1)
+	return func() bool {
+		w.stopped.Add(1)
+		return true
+	}
+}
+
+func TestCircuit_watchdog_is_unregistered_when_the_call_returns(t *testing.T) {
+	c, err := NewCircuit(&mockBreaker{})
+	require.NoError(t, err)
+
+	ctx := &watchedContext{Context: context.Background(), done: make(chan struct{})}
+	_, err = Wrap(c, noop)(ctx, noopInSuccess)
+	require.NoError(t, err)
+
+	// A watchdog left registered would pile up on long-lived contexts until they end.
+	require.EqualValues(t, 1, ctx.registered.Load(), "a cancellable context must be watched")
+	assert.EqualValues(t, 1, ctx.stopped.Load(), "the watchdog must be unregistered once the call returned")
 }
 
 func TestCircuit_failure_condition_never_called_with_nil_error(t *testing.T) {
