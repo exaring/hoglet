@@ -3,6 +3,7 @@ package hoglet
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -49,6 +50,29 @@ func BenchmarkHoglet_Do_EWMA(b *testing.B) {
 
 	f := Wrap(h, noop)
 	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = f(ctx, struct{}{})
+		}
+	})
+}
+
+func BenchmarkHoglet_Do_EWMA_cancellable(b *testing.B) {
+	// Each goroutine calls with its own cancellable context, like concurrent requests each carrying theirs, so the
+	// circuit watches it for cancellation.
+	noop := func(context.Context, struct{}) (out struct{}, err error) { return }
+	h, err := NewCircuit(
+		NewEWMABreaker(10, 0.9),
+		WithHalfOpenDelay(time.Second),
+	)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	f := Wrap(h, noop)
+	b.RunParallel(func(pb *testing.PB) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		for pb.Next() {
 			_, _ = f(ctx, struct{}{})
 		}
@@ -323,6 +347,28 @@ func TestCircuit_context_error_is_observed_before_wrapped_function_returns(t *te
 		_, err = f(ctx, noopInSuccess)
 		require.NoError(t, err)
 		assert.Equal(t, StateOpen, c.State(), "the call's own success must not override the observed cancellation")
+	})
+}
+
+func TestCircuit_watchdog_stops_when_the_call_returns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var consulted atomic.Int64
+		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithFailureCondition(func(error) bool {
+			consulted.Add(1)
+			return true
+		}))
+		require.NoError(t, err)
+
+		// e.g. a server cancels each request's context once its handler returns
+		ctx, cancel := context.WithCancel(context.Background())
+		_, err = Wrap(c, noop)(ctx, noopInSuccess)
+		require.NoError(t, err)
+
+		cancel()
+		synctest.Wait() // give a still registered watchdog the chance to fire
+		// A watchdog left registered would keep piling up on long-lived contexts until they end.
+		assert.Zero(t, consulted.Load(), "the watchdog must be unregistered once the call returned")
+		assert.Equal(t, StateClosed, c.State())
 	})
 }
 
