@@ -276,8 +276,8 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			// Note: any errors here are not "observed" and do not count towards the breaker's failure rate.
 			// This includes:
 			// - [ErrCircuitOpen]
-			// - [ErrConcurrencyLimitReached] (for blocking limited circuits)
-			// - context timeouts while blocked on concurrency limit
+			// - [ErrConcurrencyLimitReached] (for non-blocking limited circuits)
+			// - [ErrWaitingForSlot] (for blocking limited circuits: context errors while waiting for a slot)
 			// And any other errors that may be returned by optional breaker wrappers.
 			return out, err
 		}
