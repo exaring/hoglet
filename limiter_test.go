@@ -25,8 +25,8 @@ type mockObserverFactory struct{}
 
 func (mof mockObserverFactory) ObserverForCall(_ context.Context, state hoglet.State) (hoglet.Observer, error) {
 	// abuse the state argument to control the result of the call, standing in for a [hoglet.Circuit] rejecting calls
-	// while open
-	if state == hoglet.StateOpen {
+	// while open, or after another call claimed the half-open call first
+	if state != hoglet.StateClosed {
 		return nil, hoglet.ErrCircuitOpen
 	}
 	return &mockPanickingObservable{}, nil
@@ -135,8 +135,8 @@ func Test_ConcurrencyLimiter(t *testing.T) {
 }
 
 // Test_ConcurrencyLimiter_ReleasesOnInnerError ensures the limiter releases its permit when the inner factory rejects
-// the call. A leak there is terminal: the limiter sits outside the circuit's state check, so calls dropped while the
-// circuit is open would drain the permits until nothing can reach the circuit to ever close it again.
+// the call. A leak there is terminal: every call the circuit rejects after it got a slot (e.g. by losing the race for
+// the half-open call) would drain the permits until nothing can reach the circuit to ever close it again.
 func Test_ConcurrencyLimiter_ReleasesOnInnerError(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -165,7 +165,7 @@ func Test_ConcurrencyLimiter_ReleasesOnInnerError(t *testing.T) {
 				// One more dropped call than there are permits: had they leaked, the last one would be rejected by the
 				// limiter instead of the circuit.
 				for i := range limit + 1 {
-					o, err := call(hoglet.StateOpen)
+					o, err := call(hoglet.StateHalfOpen)
 					require.ErrorIs(t, err, hoglet.ErrCircuitOpen, "call %d", i)
 					assert.Nil(t, o) // nothing is handed back that could release the permit for us
 				}
@@ -179,6 +179,36 @@ func Test_ConcurrencyLimiter_ReleasesOnInnerError(t *testing.T) {
 				// The limit is still enforced, i.e. we did not release more than we held.
 				_, err = call(hoglet.StateClosed)
 				assert.Error(t, err, "limit should be reached with all %d permits held", limit)
+			})
+		})
+	}
+}
+
+// Test_ConcurrencyLimiter_OpenCircuitTakesNoSlot ensures calls into an open circuit are rejected by the circuit without
+// waiting for or taking a slot, even when all slots are taken.
+func Test_ConcurrencyLimiter_OpenCircuitTakesNoSlot(t *testing.T) {
+	tests := []struct {
+		name  string
+		block bool
+	}{
+		{name: "non-blocking", block: false},
+		{name: "blocking", block: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				of, err := hoglet.ConcurrencyLimiter(1, tt.block).Wrap(mockObserverFactory{})
+				require.NoError(t, err)
+
+				_, err = of.ObserverForCall(t.Context(), hoglet.StateClosed) // takes the only slot
+				require.NoError(t, err)
+
+				// Bounded, so the blocking variant fails instead of hanging if it waits for the slot.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				_, err = of.ObserverForCall(ctx, hoglet.StateOpen)
+				assert.ErrorIs(t, err, hoglet.ErrCircuitOpen)
 			})
 		})
 	}
