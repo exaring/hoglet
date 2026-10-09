@@ -230,6 +230,31 @@ func TestHoglet_Do(t *testing.T) {
 	}
 }
 
+func TestCircuit_call_admitted_before_opening_does_not_close_it(t *testing.T) {
+	c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute))
+	require.NoError(t, err)
+
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error)
+	go func() {
+		_, err := Wrap(c, func(ctx context.Context, in noopIn) (struct{}, error) {
+			close(started)
+			<-release
+			return noop(ctx, in)
+		})(context.Background(), noopInSuccess)
+		done <- err
+	}()
+	<-started // admitted while closed
+
+	_, err = Wrap(c, noop)(context.Background(), noopInFailure)
+	require.ErrorIs(t, err, errSentinel)
+	require.Equal(t, StateOpen, c.State())
+
+	close(release)
+	require.NoError(t, <-done)
+	assert.Equal(t, StateOpen, c.State(), "only a half-open call may close the circuit")
+}
+
 func TestCircuit_ignored_context_error_does_not_mask_wrapped_function_result(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithFailureCondition(IgnoreContextCanceled))
