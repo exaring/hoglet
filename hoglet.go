@@ -52,7 +52,8 @@ type Breaker interface {
 // ObserverFactory is an interface that allows customizing the per-call observer creation.
 type ObserverFactory interface {
 	// ObserverForCall returns an [Observer] for the incoming call.
-	// It is called with the current [State] of the circuit, before calling the wrapped function.
+	// It is called with the [State] of the circuit when the call came in, before calling the wrapped function. Middleware
+	// delaying the call may leave it outdated: the circuit decides on its own current state once the call reaches it.
 	//
 	// An error rejects the call. No [Observer] is returned in that case, so anything the factory claimed for the
 	// call must be released before returning: nothing else will.
@@ -132,7 +133,13 @@ func (c *Circuit) State() State {
 		return StateClosed
 	}
 
-	if c.halfOpenDelay == 0 || sinceNanos(oa) < c.halfOpenDelay {
+	return c.openedState(oa)
+}
+
+// openedState returns the [State] of a circuit opened at the given time. It is kept apart from [Circuit.State], so
+// that the closed case stays cheap enough to be inlined into every call.
+func (c *Circuit) openedState(openedAt int64) State {
+	if c.halfOpenDelay == 0 || sinceNanos(openedAt) < c.halfOpenDelay {
 		// open
 		return StateOpen
 	}
@@ -211,8 +218,16 @@ func sinceNanos(nanos int64) time.Duration {
 // If the breaker is closed, it returns a non-nil [Observer] that will be used to observe the result of the call.
 //
 // It implements [ObserverFactory], so that the [Circuit] can act as the base for [BreakerMiddleware].
+//
+// The given state was read before any middleware ran, which may have delayed the call since (e.g. a blocking
+// [ConcurrencyLimiter]). Unless the given state already rejects the call, the circuit therefore decides on its current
+// state, and only claims the half-open call here: a call rejected by middleware does not use it up.
 func (c *Circuit) ObserverForCall(_ context.Context, state State) (Observer, error) {
-	switch state {
+	if state == StateOpen {
+		return nil, ErrCircuitOpen
+	}
+
+	switch c.stateForCall() {
 	case StateClosed:
 		return c.closedObserver, nil
 	case StateHalfOpen:
@@ -257,7 +272,7 @@ func (s stateObserver) Observe(failure bool) {
 // Panics are observed as failures, but are not recovered (i.e.: they are "repanicked" instead).
 func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, OUT] {
 	return func(ctx context.Context, in IN) (out OUT, err error) {
-		obs, err := c.observerFactory.ObserverForCall(ctx, c.stateForCall())
+		obs, err := c.observerFactory.ObserverForCall(ctx, c.State())
 		if err != nil {
 			// Note: any errors here are not "observed" and do not count towards the breaker's failure rate.
 			// This includes:

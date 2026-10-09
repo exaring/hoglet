@@ -352,3 +352,47 @@ func maybeAssertPanic(t *testing.T, f func(), wantPanic any) {
 	}
 	wrapped(t, f)
 }
+
+func TestCircuit_limiter_rejection_does_not_use_up_half_open_call(t *testing.T) {
+	c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithBreakerMiddleware(ConcurrencyLimiter(1, false)))
+	require.NoError(t, err)
+
+	// take the only slot with a call admitted while closed
+	inflight, err := c.observerFactory.ObserverForCall(context.Background(), c.State())
+	require.NoError(t, err)
+
+	// simulate passage of time: mark the circuit as opened halfOpenDelay ago
+	c.openedAt.Store(nowNanos() - int64(c.halfOpenDelay))
+
+	_, err = Wrap(c, noop)(context.Background(), noopInSuccess)
+	require.ErrorIs(t, err, ErrConcurrencyLimitReached)
+	assert.Equal(t, StateHalfOpen, c.State(), "a call rejected by the limiter must not use up the half-open call")
+
+	inflight.Observe(true) // frees the slot; a failure cannot close the circuit
+
+	_, err = Wrap(c, noop)(context.Background(), noopInSuccess)
+	require.NoError(t, err, "the next call must get the half-open call")
+	assert.Equal(t, StateClosed, c.State())
+}
+
+func TestCircuit_call_waiting_for_slot_does_not_enter_circuit_opened_meanwhile(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithBreakerMiddleware(ConcurrencyLimiter(1, true)))
+		require.NoError(t, err)
+
+		// take the only slot with a call admitted while closed
+		inflight, err := c.observerFactory.ObserverForCall(context.Background(), c.State())
+		require.NoError(t, err)
+
+		errCh := make(chan error)
+		go func() {
+			_, err := Wrap(c, noop)(context.Background(), noopInSuccess)
+			errCh <- err
+		}()
+		synctest.Wait() // the call saw the circuit closed and now waits for the slot
+
+		inflight.Observe(true) // opens the circuit, then frees the slot
+
+		assert.ErrorIs(t, <-errCh, ErrCircuitOpen)
+	})
+}
