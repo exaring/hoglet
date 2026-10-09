@@ -282,11 +282,8 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			return out, err
 		}
 
-		// The watchdog records a context cancellation/deadline as a failure promptly, even if the wrapped function
-		// ignores its context and blocks. It is a callback registered on the context, so it only costs a goroutine if
-		// the context is actually canceled while the call runs. A context that can never be canceled (no deadline and
-		// no cancellation, e.g. [context.Background]) cannot trigger it, so we skip it entirely, relying solely on the
-		// deferred observation below.
+		// The watchdog is a callback on the context (see [Wrap] for why), so it only costs a goroutine if the context is
+		// canceled during the call. A context that can never be canceled (e.g. [context.Background]) needs none.
 		if ctx.Done() != nil {
 			// Only here can the watchdog race the deferred observe, so dedup to ensure the - potentially wrapped -
 			// observer is observed exactly once. Without a watchdog the deferred func below is the sole observer
@@ -294,13 +291,7 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			// This relies on breaker middleware observing synchronously; an async middleware observer must dedup itself.
 			obs = dedupObservableCall(obs)
 
-			// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
-			// recording a success here would mask whatever the function ends up returning.
-			stop := context.AfterFunc(ctx, func() {
-				if c.isFailure(ctx.Err()) {
-					obs.Observe(true)
-				}
-			})
+			stop := c.watch(ctx, obs)
 			defer stop()
 		}
 
@@ -315,6 +306,18 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 
 		return f(ctx, in)
 	}
+}
+
+// watch registers the watchdog recording a context error on ctx as a failure, and returns the function unregistering
+// it. It is kept out of the generic [Wrap], where the callback would be allocated one size class bigger.
+func (c *Circuit) watch(ctx context.Context, obs Observer) (stop func() bool) {
+	return context.AfterFunc(ctx, func() {
+		// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
+		// recording a success here would mask whatever the function ends up returning.
+		if c.isFailure(ctx.Err()) {
+			obs.Observe(true)
+		}
+	})
 }
 
 // State represents the state of a circuit.
