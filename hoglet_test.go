@@ -230,29 +230,56 @@ func TestHoglet_Do(t *testing.T) {
 	}
 }
 
-func TestCircuit_call_admitted_before_opening_does_not_close_it(t *testing.T) {
-	c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute))
-	require.NoError(t, err)
+func TestCircuit_only_successful_half_open_call_closes(t *testing.T) {
+	tests := []struct {
+		name    string
+		breaker func() Breaker
+	}{
+		{name: "ewma", breaker: func() Breaker { return NewEWMABreaker(10, 0.9) }},
+		{name: "slidingwindow", breaker: func() Breaker { return NewSlidingWindowBreaker(time.Minute, 0.5) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c, err := NewCircuit(tt.breaker(), WithHalfOpenDelay(time.Second))
+				require.NoError(t, err)
 
-	started, release := make(chan struct{}), make(chan struct{})
-	done := make(chan error)
-	go func() {
-		_, err := Wrap(c, func(ctx context.Context, in noopIn) (struct{}, error) {
-			close(started)
-			<-release
-			return noop(ctx, in)
-		})(context.Background(), noopInSuccess)
-		done <- err
-	}()
-	<-started // admitted while closed
+				// two calls admitted while closed, which only succeed after the circuit opened
+				release := make(chan struct{})
+				done := make(chan error)
+				for range 2 {
+					go func() {
+						_, err := Wrap(c, func(ctx context.Context, in noopIn) (struct{}, error) {
+							<-release
+							return noop(ctx, in)
+						})(context.Background(), noopInSuccess)
+						done <- err
+					}()
+				}
+				synctest.Wait()
 
-	_, err = Wrap(c, noop)(context.Background(), noopInFailure)
-	require.ErrorIs(t, err, errSentinel)
-	require.Equal(t, StateOpen, c.State())
+				_, err = Wrap(c, noop)(context.Background(), noopInFailure)
+				require.ErrorIs(t, err, errSentinel)
+				require.Equal(t, StateOpen, c.State())
 
-	close(release)
-	require.NoError(t, <-done)
-	assert.Equal(t, StateOpen, c.State(), "only a half-open call may close the circuit")
+				close(release)
+				require.NoError(t, <-done)
+				require.NoError(t, <-done)
+				assert.Equal(t, StateOpen, c.State(), "calls admitted before the circuit opened must not close it")
+
+				// their successes lowered the failure rate enough for a failing half-open call to stay below the threshold
+				time.Sleep(c.halfOpenDelay)
+				_, err = Wrap(c, noop)(context.Background(), noopInFailure)
+				require.ErrorIs(t, err, errSentinel)
+				assert.Equal(t, StateOpen, c.State(), "a failed half-open call must not close the circuit")
+
+				time.Sleep(c.halfOpenDelay)
+				_, err = Wrap(c, noop)(context.Background(), noopInSuccess)
+				require.NoError(t, err)
+				assert.Equal(t, StateClosed, c.State(), "a successful half-open call must close the circuit")
+			})
+		})
+	}
 }
 
 func TestCircuit_ignored_context_error_does_not_mask_wrapped_function_result(t *testing.T) {

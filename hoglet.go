@@ -234,9 +234,10 @@ func (s stateObserver) Observe(failure bool) {
 	case stateChangeOpen:
 		s.circuit.open()
 	case stateChangeClose:
-		// Only a call admitted half-open may close the circuit. A call still in flight from before the circuit opened
-		// says nothing about whether it has recovered, and would cut the half-open delay short.
-		if s.state == StateHalfOpen {
+		// Only a successful half-open call may close the circuit. A call still in flight from before the circuit opened
+		// says nothing about whether it has recovered, and its success may still lower the failure rate enough for a
+		// failing half-open call to come out below the threshold.
+		if s.state == StateHalfOpen && !failure {
 			s.circuit.close()
 		}
 	}
