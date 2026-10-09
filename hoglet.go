@@ -2,7 +2,6 @@ package hoglet
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -283,13 +282,11 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			return out, err
 		}
 
-		// The watchdog goroutine exists to record a context cancellation/deadline as a failure promptly, even if the
-		// wrapped function ignores its context and blocks. If the context can never be canceled (no deadline and no
-		// cancellation, e.g. [context.Background]), the watchdog can never fire usefully, so we skip it and the
-		// associated context allocation entirely, relying solely on the deferred observation below.
-		//
-		// TODO: allow skipping the watchdog via an option for callers that guarantee their wrapped function respects
-		// its context, trading prompt cancellation detection for one less goroutine + context allocation per call.
+		// The watchdog records a context cancellation/deadline as a failure promptly, even if the wrapped function
+		// ignores its context and blocks. It is a callback registered on the context, so it only costs a goroutine if
+		// the context is actually canceled while the call runs. A context that can never be canceled (no deadline and
+		// no cancellation, e.g. [context.Background]) cannot trigger it, so we skip it entirely, relying solely on the
+		// deferred observation below.
 		if ctx.Done() != nil {
 			// Only here can the watchdog race the deferred observe, so dedup to ensure the - potentially wrapped -
 			// observer is observed exactly once. Without a watchdog the deferred func below is the sole observer
@@ -297,10 +294,14 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 			// This relies on breaker middleware observing synchronously; an async middleware observer must dedup itself.
 			obs = dedupObservableCall(obs)
 
-			obsCtx, cancel := context.WithCancelCause(ctx)
-			defer cancel(errWrappedFunctionDone)
-
-			go c.observeCtx(obs, obsCtx)
+			// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
+			// recording a success here would mask whatever the function ends up returning.
+			stop := context.AfterFunc(ctx, func() {
+				if c.isFailure(ctx.Err()) {
+					obs.Observe(true)
+				}
+			})
+			defer stop()
 		}
 
 		defer func() {
@@ -313,27 +314,6 @@ func Wrap[IN, OUT any](c *Circuit, f WrappableFunc[IN, OUT]) WrappableFunc[IN, O
 		}()
 
 		return f(ctx, in)
-	}
-}
-
-// errWrappedFunctionDone is used to distinguish between internal and external (to the lib) context cancellations.
-var errWrappedFunctionDone = errors.New("wrapped function done")
-
-// observeCtx observes the given context for cancellation and records it as a failure.
-// It assumes [Observer] is idempotent and deduplicates calls itself.
-func (c *Circuit) observeCtx(obs Observer, ctx context.Context) {
-	// We want to observe a context error as soon as possible to open the breaker, but at the same time we want to
-	// keep the call to the wrapped function synchronous to avoid all pitfalls that come with asynchronicity.
-	<-ctx.Done()
-
-	if context.Cause(ctx) == errWrappedFunctionDone {
-		return // internal cancellation: the wrapped function returned already and is observed by its caller
-	}
-
-	// Only a failure is worth recording early. Anything else is left to the wrapped function's actual result:
-	// recording a success here would mask whatever the function ends up returning.
-	if c.isFailure(ctx.Err()) {
-		obs.Observe(true)
 	}
 }
 
