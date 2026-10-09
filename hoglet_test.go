@@ -350,26 +350,36 @@ func TestCircuit_context_error_is_observed_before_wrapped_function_returns(t *te
 	})
 }
 
-func TestCircuit_watchdog_stops_when_the_call_returns(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var consulted atomic.Int64
-		c, err := NewCircuit(&mockBreaker{}, WithHalfOpenDelay(time.Minute), WithFailureCondition(func(error) bool {
-			consulted.Add(1)
-			return true
-		}))
-		require.NoError(t, err)
+// watchedContext is a never canceled context counting the callbacks [context.AfterFunc] registers on it, and how many
+// of them it unregisters again.
+type watchedContext struct {
+	context.Context
+	done                chan struct{}
+	registered, stopped atomic.Int64
+}
 
-		// e.g. a server cancels each request's context once its handler returns
-		ctx, cancel := context.WithCancel(context.Background())
-		_, err = Wrap(c, noop)(ctx, noopInSuccess)
-		require.NoError(t, err)
+func (w *watchedContext) Done() <-chan struct{} { return w.done }
 
-		cancel()
-		synctest.Wait() // give a still registered watchdog the chance to fire
-		// A watchdog left registered would keep piling up on long-lived contexts until they end.
-		assert.Zero(t, consulted.Load(), "the watchdog must be unregistered once the call returned")
-		assert.Equal(t, StateClosed, c.State())
-	})
+// AfterFunc is used by [context.AfterFunc] instead of its own registration.
+func (w *watchedContext) AfterFunc(func()) (stop func() bool) {
+	w.registered.Add(1)
+	return func() bool {
+		w.stopped.Add(1)
+		return true
+	}
+}
+
+func TestCircuit_watchdog_is_unregistered_when_the_call_returns(t *testing.T) {
+	c, err := NewCircuit(&mockBreaker{})
+	require.NoError(t, err)
+
+	ctx := &watchedContext{Context: context.Background(), done: make(chan struct{})}
+	_, err = Wrap(c, noop)(ctx, noopInSuccess)
+	require.NoError(t, err)
+
+	// A watchdog left registered would pile up on long-lived contexts until they end.
+	require.EqualValues(t, 1, ctx.registered.Load(), "a cancellable context must be watched")
+	assert.EqualValues(t, 1, ctx.stopped.Load(), "the watchdog must be unregistered once the call returned")
 }
 
 func TestCircuit_failure_condition_never_called_with_nil_error(t *testing.T) {
