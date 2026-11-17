@@ -38,6 +38,10 @@ f, _ = hoglet.Wrap(h, foo)(context.Background(), 42)
 fmt.Println(f.Bar) // 42
 ```
 
+## Extensions
+
+- [Prometheus metrics](extensions/prometheus/README.md)
+
 ## Operation
 
 Each call to the wrapped function (via `Circuit.Call`) is tracked and its result "observed". Breakers then react to
